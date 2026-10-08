@@ -374,30 +374,25 @@ app.post('/api/setup', csrf, async (req, res, next) => {
 app.post('/api/login', loginLimiter, csrf, async (req, res, next) => {
   try {
     const password = String(req.body.password ?? '');
-    if (!password || password.length > 128) return res.status(401).json({ error: 'Senha incorreta.' });
+    if (!password || password.length > 128) return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
+    const rawUsername = String(req.body.username ?? '').trim();
     let user = null;
-    const tag = passwordTag(password);
-    const resellerMatches = [];
-    const taggedRows = db.prepare('SELECT id, username, password_hash AS passwordHash, password_tag AS passwordTag FROM resellers WHERE password_tag=? AND active=1 AND removed_at IS NULL').all(tag);
-    const legacyRows = db.prepare('SELECT id, username, password_hash AS passwordHash FROM resellers WHERE password_tag IS NULL AND active=1 AND removed_at IS NULL').all();
-    for (const reseller of [...taggedRows, ...legacyRows]) {
-      if (reseller.passwordHash && await bcrypt.compare(password, reseller.passwordHash)) resellerMatches.push(reseller);
+    if (!rawUsername) {
+      if (ownerFileExists()) {
+        const owner = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
+        if (owner.passwordHash && await bcrypt.compare(password, owner.passwordHash)) user = { role: 'owner', username: '' };
+      }
+    } else {
+      let username;
+      try { username = validateUsername(rawUsername); }
+      catch { return res.status(401).json({ error: 'Usuário ou senha incorretos.' }); }
+      const reseller = db.prepare('SELECT id, username, password_hash AS passwordHash, password_tag AS passwordTag FROM resellers WHERE username=? AND active=1 AND removed_at IS NULL').get(username);
+      if (reseller?.passwordHash && await bcrypt.compare(password, reseller.passwordHash)) {
+        user = { role: 'reseller', id: reseller.id, username: reseller.username };
+        if (!reseller.passwordTag) db.prepare('UPDATE resellers SET password_tag=? WHERE id=?').run(passwordTag(password), user.id);
+      }
     }
-    if (resellerMatches.length > 1) return res.status(401).json({ error: 'Esta senha está associada a mais de uma conta. Peça ao dono para definir senhas individuais.' });
-    let ownerMatched = false;
-    if (ownerFileExists()) {
-      const owner = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
-      ownerMatched = Boolean(owner.passwordHash && await bcrypt.compare(password, owner.passwordHash));
-    }
-    if (ownerMatched && resellerMatches.length) {
-      return res.status(401).json({ error: 'Essa senha está repetida em outra conta. Peça ao dono para alterar a senha do revendedor.' });
-    }
-    if (ownerMatched) user = { role: 'owner', username: '' };
-    else if (resellerMatches.length === 1) user = { role: 'reseller', id: resellerMatches[0].id, username: resellerMatches[0].username };
-    if (!user) return res.status(401).json({ error: 'Senha incorreta.' });
-    if (user.role === 'reseller' && !resellerMatches[0].passwordTag) {
-      db.prepare('UPDATE resellers SET password_tag=? WHERE id=?').run(tag, user.id);
-    }
+    if (!user) return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
     req.session.regenerate(err => {
       if (err) return next(err);
       req.session.user = user;

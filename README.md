@@ -4,8 +4,8 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
 
 ## O que está implementado
 
-- Login com um único campo de senha: o proprietário usa sua senha-mestra fixa; cada revendedor usa uma senha individual criada pelo dono. Não há campo de usuário na tela de entrada. O sistema identifica a conta no servidor, rejeita senhas repetidas e nunca envia hashes ou a senha-mestra ao navegador.
-- No Render, defina `OWNER_PASSWORD` como variável privada do serviço ou grupo de ambiente: o servidor grava somente o hash bcrypt no arquivo separado `data/owner-auth.json`. Se a variável não estiver configurada, o primeiro acesso pede para definir a senha-mestra e também armazena somente o hash. Revendedores aparecem por usuário na área administrativa, mas entram apenas com a própria senha.
+- A tela normal pede usuário e senha. Revendedores informam os dois; o único administrador deixa o campo usuário vazio e informa a senha-mestra. Não há conta com usuário `admin`. O servidor identifica o administrador pelo campo vazio e nunca envia hashes ou a senha-mestra ao navegador.
+- No Render, defina `OWNER_PASSWORD` como variável privada do serviço ou grupo de ambiente: o servidor grava somente o hash bcrypt no arquivo separado `data/owner-auth.json`. Se a variável não estiver configurada, o primeiro acesso pede para definir a senha-mestra e também armazena somente o hash. Revendedores aparecem por usuário na área administrativa e entram com o próprio usuário e senha individual.
 - Contas de revendedor com senha em hash, saldo de créditos e prefixo próprio (por padrão, GoldCheats). O dono pode remover o acesso: o login é bloqueado, a conta sai da lista, o saldo restante fica arquivado e as keys emitidas continuam no Firebase e no histórico. O nome de usuário fica livre para ser cadastrado novamente.
 - O proprietário pode adicionar/remover créditos, editar prefixos e gerir todas as keys. O revendedor pode pausar/retomar, resetar o vínculo ou excluir somente as próprias keys; nenhuma dessas ações altera créditos. Pausar bloqueia a key no app, mas a validade continua correndo. Resetar apenas desvincula o dispositivo e a expiração também continua correndo. Pausa/reset ficam visíveis na tabela e habilitam quando houver vínculo, conforme o gerador de referência.
 - Formato do app de referência: prefixo normalizado para maiúsculas e somente letras/números, hífen e 6 caracteres aleatórios de `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (sem caracteres ambíguos).
@@ -32,12 +32,12 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
    ```
 
    Autorize o acesso a arquivos quando o Android solicitar.
-3. Baixe `keydesk-revendedores-v19.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
+3. Baixe `keydesk-revendedores-v20.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
 
    ```bash
    mkdir -p ~/keydesk-v14
    if [ -d ~/keydesk/key-reseller-panel/data ]; then mkdir -p ~/keydesk-v14/data && cp -an ~/keydesk/key-reseller-panel/data/. ~/keydesk-v14/data/; fi
-   unzip -o ~/storage/downloads/keydesk-revendedores-v19.zip -d ~/keydesk-v14
+   unzip -o ~/storage/downloads/keydesk-revendedores-v20.zip -d ~/keydesk-v14
    cd ~/keydesk-v14
    ```
 
@@ -82,7 +82,7 @@ O `127.0.0.1` só abre no próprio celular; compartilhe o link `https://…loca.
    ```
 
 3. Mantenha o servidor aberto e acesse `http://127.0.0.1:3000`. Não abra `index.html` diretamente.
-4. Se `OWNER_PASSWORD` não estiver configurada, no primeiro acesso defina a senha-mestra fixa do dono no único campo. Nos próximos acessos, dono e revendedores informam somente a própria senha; o servidor reconhece o perfil sem solicitar usuário.
+4. Se `OWNER_PASSWORD` não estiver configurada, no primeiro acesso defina a senha-mestra do dono. Depois, na tela normal, revendedores informam usuário e senha; o dono deixa usuário vazio e informa a senha-mestra.
 5. Na aba **Revendedores**, crie os acessos, créditos e prefixos.
 
 A senha do proprietário não está embutida no código, JavaScript, HTML ou ZIP nem é exibida pelo site; somente o hash fica no arquivo de autenticação do servidor. Cada conta de revendedor deve ter uma senha exclusiva. O dono pode redefinir a senha de qualquer revendedor na lista de contas, sem consultar a senha anterior.
@@ -97,9 +97,9 @@ Ao configurar uma hospedagem HTTPS, configure `HOST=0.0.0.0`, deixe a plataforma
 
 ### Render (plano gratuito, para teste)
 
-O arquivo `render.yaml` configura um serviço Node.js gratuito. Extraia o ZIP, envie os arquivos ao GitHub e, no Render, crie um **Blueprint** conectado ao repositório que contém `render.yaml`. O Blueprint pede `OWNER_PASSWORD` como segredo não sincronizado; o Render instalará com `npm ci` e iniciará com `npm start`. Depois do deploy, use o endereço `*.onrender.com` exibido no painel.
+O arquivo `render.yaml` configura um serviço Node.js gratuito. Extraia o ZIP, envie os arquivos ao GitHub e, no Render, crie um **Blueprint** conectado ao repositório que contém `render.yaml`. O Blueprint pede `OWNER_PASSWORD` como segredo não sincronizado; o Render instalará com `npm ci` e iniciará com `npm start`. Depois do deploy, use o endereço `*.onrender.com` exibido no painel. No login, o administrador deixa Usuário em branco.
 
-Para atualizar um serviço Render que já existe, substitua os arquivos do repositório GitHub pelos do ZIP (mantenha todos no diretório raiz), faça commit e, antes do deploy, adicione `OWNER_PASSWORD` em **Environment** (ou no grupo de ambiente conectado) como variável privada. Digite ali sua senha-mestra; não a coloque no GitHub nem em `.env` público. O serviço a converte em hash no arquivo separado. Depois escolha **Manual Deploy → Deploy latest commit** se não iniciar automaticamente. Não crie outro serviço para esta atualização. Hashes antigos de revendedores são reconhecidos e eles entram sem usuário.
+Para atualizar um serviço Render que já existe, substitua os arquivos do repositório GitHub pelos do ZIP (mantenha todos no diretório raiz), faça commit e, antes do deploy, adicione `OWNER_PASSWORD` em **Environment** (ou no grupo de ambiente conectado) como variável privada. Digite ali sua senha-mestra; não a coloque no GitHub nem em `.env` público. O serviço a converte em hash no arquivo separado. Depois escolha **Manual Deploy → Deploy latest commit** se não iniciar automaticamente. Não crie outro serviço para esta atualização. Hashes antigos de revendedores são reconhecidos: o dono entra com usuário vazio e cada revendedor informa seu usuário e senha.
 
 **Limitações importantes:** o serviço gratuito pode dormir após 15 minutos sem acessos e demorar cerca de um minuto para voltar. Ele não oferece disco persistente: o `data/app.sqlite` pode ser perdido em reinícios/implantações, incluindo contas e créditos. Se `data/owner-auth.json` for apagado, `OWNER_PASSWORD` privada recria o hash do dono no próximo início; as contas/créditos não são restaurados por essa variável. As keys já enviadas ao Firebase ficam no Firebase. Use o plano grátis apenas para testes com dados fictícios; para preservar dados locais, é necessário armazenamento persistente.
 
@@ -119,14 +119,14 @@ Para preservar cadastros, pare o servidor e faça cópia da pasta `data/` (inclu
 
 ## Atualizar instalação no Termux
 
-O ZIP v19 extrai direto na raiz e preserva `data/`. Para atualizar a instalação existente, pare o serviço, faça um backup local dos dados, extraia o ZIP e inicie novamente:
+O ZIP v20 extrai direto na raiz e preserva `data/`. Para atualizar a instalação existente, pare o serviço, faça um backup local dos dados, extraia o ZIP e inicie novamente:
 
 ```bash
 mkdir -p ~/keydesk-v14
 cd ~/keydesk-v14
 bash SERVICO_24H.sh stop
 cp -a data ~/keydesk-data-backup-$(date +%Y%m%d-%H%M%S)
-unzip -o ~/storage/downloads/keydesk-revendedores-v19.zip -d ~/keydesk-v14
+unzip -o ~/storage/downloads/keydesk-revendedores-v20.zip -d ~/keydesk-v14
 pkg install nodejs-lts unzip tmux termux-api -y
 bash SERVICO_24H.sh start
 ```

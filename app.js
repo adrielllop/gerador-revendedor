@@ -38,19 +38,20 @@ function authScreen(setup=false) {
       <div class="auth-card-top"><div class="brand-mini"><div class="brand-mark small">K</div><span>KEYDESK</span></div><span class="auth-secure-badge"><i></i> ACESSO SEGURO</span></div>
       <div class="auth-intro"><div class="eyebrow">${setup ? 'PRIMEIRO ACESSO' : 'ÁREA RESTRITA'}</div>
       <h2>${setup ? 'Defina a senha-mestra' : 'Acesse seu painel'}</h2>
-      <p class="muted">${setup ? 'Cadastre a senha fixa do proprietário. Ela será guardada como hash no servidor.' : 'Digite sua senha individual. O servidor reconhece o dono ou o revendedor automaticamente.'}</p></div>
+      <p class="muted">${setup ? 'Cadastre a senha fixa do proprietário. Ela será guardada como hash no servidor.' : 'Revendedor: informe usuário e senha. Administrador: deixe o campo usuário em branco.'}</p></div>
       <form id="authForm" class="form-stack">
-        <label class="auth-field"><span>${setup ? 'Senha-mestra do dono' : 'Senha do revendedor ou do dono'}</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">▣</span><input id="authPassword" name="password" type="password" required ${setup ? 'minlength="8"' : ''} maxlength="128" autocomplete="${setup ? 'new-password' : 'current-password'}" placeholder="${setup ? 'Mínimo de 8 caracteres' : 'Digite sua senha de acesso'}"></div></label>
+        ${setup ? '' : '<label class="auth-field"><span>Usuário</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">@</span><input id="authUsername" name="username" type="text" maxlength="32" autocomplete="username" placeholder="Em branco para administrador"></div></label>'}
+        <label class="auth-field"><span>${setup ? 'Senha-mestra do dono' : 'Senha'}</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">▣</span><input id="authPassword" name="password" type="password" required ${setup ? 'minlength="8"' : ''} maxlength="128" autocomplete="${setup ? 'new-password' : 'current-password'}" placeholder="${setup ? 'Mínimo de 8 caracteres' : 'Digite sua senha'}"></div></label>
         <button class="button primary full auth-submit" type="submit">${setup ? 'Salvar senha-mestra' : 'Entrar no painel'} <span>→</span></button>
       </form>
-      <div class="auth-note"><span class="auth-note-icon">✓</span><p><b>Privacidade protegida</b><span>A senha não é exibida nem enviada ao navegador após o login. Cada revendedor tem seu próprio acesso.</span></p></div>
+      <div class="auth-note"><span class="auth-note-icon">✓</span><p><b>Privacidade protegida</b><span>${setup ? 'A senha-mestra é armazenada como hash no servidor.' : 'Administrador deixa usuário em branco; revendedor entra com seu próprio usuário e senha.'}</span></p></div>
     </div><div class="auth-copyright">KEYDESK <span>·</span> AMBIENTE PRIVADO</div></section>
   </main>`;
   document.getElementById('authForm').addEventListener('submit', async e => {
     e.preventDefault(); const form = new FormData(e.currentTarget);
     const button = e.currentTarget.querySelector('button'); button.disabled = true; button.textContent = 'Aguarde…';
     try {
-      const result = await api(setup ? '/api/setup' : '/api/login', { method:'POST', body:JSON.stringify({ password:form.get('password') }) });
+      const result = await api(setup ? '/api/setup' : '/api/login', { method:'POST', body:JSON.stringify({ username:setup?'':form.get('username'), password:form.get('password') }) });
       state.user = result.user; state.csrf = result.csrfToken; await loadData();
     } catch(err) { toast(err.message, 'error'); button.disabled = false; button.innerHTML = `${setup ? 'Salvar senha-mestra' : 'Entrar no painel'} <span>→</span>`; }
   });
