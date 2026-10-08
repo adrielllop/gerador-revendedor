@@ -15,5 +15,7 @@ services:
         value: "true"
       - key: SESSION_SECRET
         generateValue: true
+      - key: OWNER_PASSWORD
+        sync: false
       - key: FIREBASE_DATABASE_PATH
         value: proxyAndroid/keys

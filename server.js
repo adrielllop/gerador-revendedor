@@ -41,6 +41,17 @@ function sessionSecret() {
 function passwordTag(password) {
   return crypto.createHmac('sha256', sessionSecret()).update(String(password)).digest('hex');
 }
+function writeOwnerAuthFile(document) {
+  const tmp = `${OWNER_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(document, null, 2), { mode: 0o600, flag: 'w' });
+  try { fs.renameSync(tmp, OWNER_FILE); }
+  catch (err) {
+    if (!['EEXIST', 'EPERM'].includes(err.code)) throw err;
+    fs.rmSync(OWNER_FILE, { force: true });
+    fs.renameSync(tmp, OWNER_FILE);
+  }
+  try { fs.chmodSync(OWNER_FILE, 0o600); } catch {}
+}
 class LocalDatabase {
   constructor(engine, filename) { this.engine = engine; this.filename = filename; this.txDepth = 0; }
   pragma(command) { try { this.engine.exec(`PRAGMA ${command}`); } catch {} }
@@ -97,7 +108,7 @@ db.exec(`
     username TEXT NOT NULL COLLATE NOCASE UNIQUE,
     password_hash TEXT NOT NULL,
     credits INTEGER NOT NULL DEFAULT 0 CHECK(credits >= 0),
-    prefix TEXT NOT NULL DEFAULT 'Gold Sheets',
+    prefix TEXT NOT NULL DEFAULT 'GoldCheats',
     active INTEGER NOT NULL DEFAULT 1,
     former_username TEXT,
     removed_at TEXT,
@@ -153,6 +164,21 @@ if (!keyColumns.has('duration_unit')) db.exec("ALTER TABLE keys ADD COLUMN durat
 if (!keyColumns.has('credit_cost')) db.exec('ALTER TABLE keys ADD COLUMN credit_cost REAL NOT NULL DEFAULT 1');
 db.prepare("UPDATE keys SET status='pending' WHERE status='active' AND phone IS NULL AND activated_at IS NULL").run();
 db.prepare('UPDATE keys SET phone=NULL, activated_at=NULL WHERE phone IS NOT NULL OR activated_at IS NOT NULL').run();
+
+// OWNER_PASSWORD is supplied only through private server configuration. Persist its bcrypt hash separately.
+const configuredOwnerPassword = String(process.env.OWNER_PASSWORD || '');
+if (configuredOwnerPassword) {
+  if (configuredOwnerPassword.length < 8 || configuredOwnerPassword.length > 128) {
+    throw new Error('A variável privada OWNER_PASSWORD deve ter entre 8 e 128 caracteres.');
+  }
+  const activeResellers = db.prepare('SELECT password_hash AS passwordHash FROM resellers WHERE active=1 AND removed_at IS NULL').all();
+  for (const reseller of activeResellers) {
+    if (reseller.passwordHash && await bcrypt.compare(configuredOwnerPassword, reseller.passwordHash)) {
+      throw new Error('OWNER_PASSWORD não pode ser igual à senha de um revendedor.');
+    }
+  }
+  writeOwnerAuthFile({ passwordHash: await bcrypt.hash(configuredOwnerPassword, 12), createdAt: new Date().toISOString() });
+}
 
 const app = express();
 app.disable('x-powered-by');
@@ -335,11 +361,7 @@ app.post('/api/setup', csrf, async (req, res, next) => {
     if (ownerFileExists()) return res.status(409).json({ error: 'O painel já foi configurado.' });
     const password = validateOwnerPassword(req.body.password);
     await ensureUniqueAccessPassword(password);
-    const document = JSON.stringify({ passwordHash: await bcrypt.hash(password, 12), createdAt: new Date().toISOString() }, null, 2);
-    const tmp = OWNER_FILE + '.tmp';
-    fs.writeFileSync(tmp, document, { mode: 0o600, flag: 'wx' });
-    fs.renameSync(tmp, OWNER_FILE);
-    try { fs.chmodSync(OWNER_FILE, 0o600); } catch {}
+    writeOwnerAuthFile({ passwordHash: await bcrypt.hash(password, 12), createdAt: new Date().toISOString() });
     audit('Dono', 'owner_setup', {});
     req.session.regenerate(err => {
       if (err) return next(err);
@@ -430,7 +452,7 @@ app.post('/api/resellers', requireAuth, requireOwner, csrf, async (req, res) => 
     const username = validateUsername(req.body.username);
     const password = validatePassword(req.body.password);
     await ensureUniqueAccessPassword(password);
-    const prefix = validatePrefix(req.body.prefix || 'Gold Sheets');
+    const prefix = validatePrefix(req.body.prefix || 'GoldCheats');
     const credits = Number(req.body.credits || 0);
     if (!halfCreditValue(credits) || credits < 0) throw new Error('Créditos iniciais devem ser múltiplos de 0,5 e não negativos.');
     const result = db.prepare('INSERT INTO resellers (username, password_hash, password_tag, credits, prefix) VALUES (?, ?, ?, ?, ?)').run(username, await bcrypt.hash(password, 12), passwordTag(password), credits, prefix);
