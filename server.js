@@ -38,6 +38,9 @@ function sessionSecret() {
   fs.writeFileSync(SESSION_SECRET_FILE, value, { mode: 0o600, flag: 'wx' });
   return value;
 }
+function passwordTag(password) {
+  return crypto.createHmac('sha256', sessionSecret()).update(String(password)).digest('hex');
+}
 class LocalDatabase {
   constructor(engine, filename) { this.engine = engine; this.filename = filename; this.txDepth = 0; }
   pragma(command) { try { this.engine.exec(`PRAGMA ${command}`); } catch {} }
@@ -135,6 +138,8 @@ db.exec(`
 const resellerColumns = new Set(db.prepare('PRAGMA table_info(resellers)').all().map(column => column.name));
 if (!resellerColumns.has('former_username')) db.exec('ALTER TABLE resellers ADD COLUMN former_username TEXT');
 if (!resellerColumns.has('removed_at')) db.exec('ALTER TABLE resellers ADD COLUMN removed_at TEXT');
+if (!resellerColumns.has('password_tag')) db.exec('ALTER TABLE resellers ADD COLUMN password_tag TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_resellers_password_tag ON resellers(password_tag) WHERE password_tag IS NOT NULL');
 if (!db.prepare('SELECT id FROM rules LIMIT 1').get()) {
   db.prepare('INSERT INTO rules (name, credit_cost, separator, suffix_length, alphabet) VALUES (?, ?, ?, ?, ?)')
     .run('Padrão', 1, '-', 6, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
@@ -207,11 +212,6 @@ function validateUsername(value) {
   if (!/^[A-Za-z0-9_.-]{3,32}$/.test(username)) throw new Error('Use um usuário de 3 a 32 caracteres: letras, números, ponto, hífen ou sublinhado.');
   return username;
 }
-function validateOwnerUsername(value) {
-  const username = cleanText(value, 32);
-  if (username && !/^[A-Za-z0-9_.-]{3,32}$/.test(username)) throw new Error('Nome de usuário inválido.');
-  return username;
-}
 function validateOwnerPassword(value) {
   const password = String(value ?? '');
   if (password.length < 8 || password.length > 128) throw new Error('A senha do proprietário deve ter entre 8 e 128 caracteres.');
@@ -221,6 +221,26 @@ function validatePassword(value) {
   const password = String(value ?? '');
   if (password.length < 10 || password.length > 128) throw new Error('A senha deve ter entre 10 e 128 caracteres.');
   return password;
+}
+async function ensureUniqueAccessPassword(password, exceptResellerId = null) {
+  const tag = passwordTag(password);
+  if (ownerFileExists()) {
+    const owner = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
+    if (owner.passwordHash && await bcrypt.compare(password, owner.passwordHash)) {
+      throw new Error('Essa senha já pertence a outro acesso. Cada conta precisa de uma senha exclusiva.');
+    }
+  }
+  const tagged = db.prepare('SELECT id FROM resellers WHERE password_tag=? AND active=1 AND removed_at IS NULL').get(tag);
+  if (tagged && Number(tagged.id) !== Number(exceptResellerId)) {
+    throw new Error('Essa senha já pertence a outro acesso. Cada conta precisa de uma senha exclusiva.');
+  }
+  const legacyRows = db.prepare('SELECT id, password_hash AS passwordHash FROM resellers WHERE password_tag IS NULL AND active=1 AND removed_at IS NULL').all();
+  for (const row of legacyRows) {
+    if (Number(row.id) === Number(exceptResellerId)) continue;
+    if (row.passwordHash && await bcrypt.compare(password, row.passwordHash)) {
+      throw new Error('Essa senha já pertence a outro acesso. Cada conta precisa de uma senha exclusiva.');
+    }
+  }
 }
 function validatePrefix(value) {
   const prefix = cleanText(value, 64);
@@ -313,17 +333,17 @@ app.get('/api/bootstrap', (req, res) => res.json({ setupRequired: !ownerFileExis
 app.post('/api/setup', csrf, async (req, res, next) => {
   try {
     if (ownerFileExists()) return res.status(409).json({ error: 'O painel já foi configurado.' });
-    const username = validateOwnerUsername(req.body.username);
     const password = validateOwnerPassword(req.body.password);
-    const document = JSON.stringify({ username, passwordHash: await bcrypt.hash(password, 12), createdAt: new Date().toISOString() }, null, 2);
+    await ensureUniqueAccessPassword(password);
+    const document = JSON.stringify({ passwordHash: await bcrypt.hash(password, 12), createdAt: new Date().toISOString() }, null, 2);
     const tmp = OWNER_FILE + '.tmp';
     fs.writeFileSync(tmp, document, { mode: 0o600, flag: 'wx' });
     fs.renameSync(tmp, OWNER_FILE);
     try { fs.chmodSync(OWNER_FILE, 0o600); } catch {}
-    audit(username || 'Dono', 'owner_setup', {});
+    audit('Dono', 'owner_setup', {});
     req.session.regenerate(err => {
       if (err) return next(err);
-      req.session.user = { role: 'owner', username };
+      req.session.user = { role: 'owner', username: '' };
       req.session.csrfToken = crypto.randomBytes(32).toString('hex');
       req.session.save(err2 => err2 ? next(err2) : res.json({ user: safeUser(req), csrfToken: req.session.csrfToken }));
     });
@@ -331,19 +351,31 @@ app.post('/api/setup', csrf, async (req, res, next) => {
 });
 app.post('/api/login', loginLimiter, csrf, async (req, res, next) => {
   try {
-    const username = cleanText(req.body.username, 32);
     const password = String(req.body.password ?? '');
+    if (!password || password.length > 128) return res.status(401).json({ error: 'Senha incorreta.' });
     let user = null;
+    const tag = passwordTag(password);
+    const resellerMatches = [];
+    const taggedRows = db.prepare('SELECT id, username, password_hash AS passwordHash, password_tag AS passwordTag FROM resellers WHERE password_tag=? AND active=1 AND removed_at IS NULL').all(tag);
+    const legacyRows = db.prepare('SELECT id, username, password_hash AS passwordHash FROM resellers WHERE password_tag IS NULL AND active=1 AND removed_at IS NULL').all();
+    for (const reseller of [...taggedRows, ...legacyRows]) {
+      if (reseller.passwordHash && await bcrypt.compare(password, reseller.passwordHash)) resellerMatches.push(reseller);
+    }
+    if (resellerMatches.length > 1) return res.status(401).json({ error: 'Esta senha está associada a mais de uma conta. Peça ao dono para definir senhas individuais.' });
+    let ownerMatched = false;
     if (ownerFileExists()) {
       const owner = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
-      if (owner.username.toLowerCase() === username.toLowerCase() && await bcrypt.compare(password, owner.passwordHash)) user = { role: 'owner', username: owner.username };
+      ownerMatched = Boolean(owner.passwordHash && await bcrypt.compare(password, owner.passwordHash));
     }
-    if (!user) {
-      const reseller = db.prepare('SELECT id, username, password_hash, active FROM resellers WHERE username = ? COLLATE NOCASE AND active = 1 AND removed_at IS NULL').get(username);
-      const passwordHash = typeof reseller?.password_hash === 'string' ? reseller.password_hash : '';
-      if (reseller && reseller.active && passwordHash && await bcrypt.compare(password, passwordHash)) user = { role: 'reseller', id: reseller.id, username: reseller.username };
+    if (ownerMatched && resellerMatches.length) {
+      return res.status(401).json({ error: 'Essa senha está repetida em outra conta. Peça ao dono para alterar a senha do revendedor.' });
     }
-    if (!user) return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
+    if (ownerMatched) user = { role: 'owner', username: '' };
+    else if (resellerMatches.length === 1) user = { role: 'reseller', id: resellerMatches[0].id, username: resellerMatches[0].username };
+    if (!user) return res.status(401).json({ error: 'Senha incorreta.' });
+    if (user.role === 'reseller' && !resellerMatches[0].passwordTag) {
+      db.prepare('UPDATE resellers SET password_tag=? WHERE id=?').run(tag, user.id);
+    }
     req.session.regenerate(err => {
       if (err) return next(err);
       req.session.user = user;
@@ -397,10 +429,11 @@ app.post('/api/resellers', requireAuth, requireOwner, csrf, async (req, res) => 
   try {
     const username = validateUsername(req.body.username);
     const password = validatePassword(req.body.password);
+    await ensureUniqueAccessPassword(password);
     const prefix = validatePrefix(req.body.prefix || 'Gold Sheets');
     const credits = Number(req.body.credits || 0);
     if (!halfCreditValue(credits) || credits < 0) throw new Error('Créditos iniciais devem ser múltiplos de 0,5 e não negativos.');
-    const result = db.prepare('INSERT INTO resellers (username, password_hash, credits, prefix) VALUES (?, ?, ?, ?)').run(username, await bcrypt.hash(password, 12), credits, prefix);
+    const result = db.prepare('INSERT INTO resellers (username, password_hash, password_tag, credits, prefix) VALUES (?, ?, ?, ?, ?)').run(username, await bcrypt.hash(password, 12), passwordTag(password), credits, prefix);
     audit(req.session.user.username || 'Dono', 'reseller_created', { reseller: username, credits, prefix });
     res.status(201).json({ id: Number(result.lastInsertRowid) });
   } catch (err) { res.status(400).json({ error: err.message.includes('UNIQUE') ? 'Esse usuário já existe.' : err.message }); }
@@ -427,7 +460,11 @@ app.patch('/api/resellers/:id', requireAuth, requireOwner, csrf, async (req, res
     if (!r) return res.status(404).json({ error: 'Revendedor não encontrado.' });
     if (req.body.active !== undefined) return res.status(400).json({ error: 'Ativação e desativação de revendedores não estão disponíveis.' });
     if (req.body.prefix !== undefined) db.prepare('UPDATE resellers SET prefix=? WHERE id=?').run(validatePrefix(req.body.prefix), id);
-    if (req.body.password) db.prepare('UPDATE resellers SET password_hash=? WHERE id=?').run(await bcrypt.hash(validatePassword(req.body.password), 12), id);
+    if (req.body.password) {
+      const password = validatePassword(req.body.password);
+      await ensureUniqueAccessPassword(password, id);
+      db.prepare('UPDATE resellers SET password_hash=?, password_tag=? WHERE id=?').run(await bcrypt.hash(password, 12), passwordTag(password), id);
+    }
     audit(req.session.user.username || 'Dono', 'reseller_updated', { reseller: r.username, prefix: req.body.prefix, passwordChanged: Boolean(req.body.password) });
     res.json({ ok: true });
   } catch (err) { res.status(400).json({ error: err.message }); }
@@ -443,7 +480,7 @@ app.delete('/api/resellers/:id', requireAuth, requireOwner, csrf, async (req, re
     const replacementHash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12);
     const removedAt = new Date().toISOString();
     const tx = db.transaction(() => {
-      db.prepare('UPDATE resellers SET username=?, former_username=?, password_hash=?, active=0, removed_at=? WHERE id=?')
+      db.prepare('UPDATE resellers SET username=?, former_username=?, password_hash=?, password_tag=NULL, active=0, removed_at=? WHERE id=?')
         .run(archivedUsername, previousUsername, replacementHash, removedAt, id);
       audit(req.session.user.username || 'Dono', 'reseller_removed', { reseller: previousUsername, creditsArchived: reseller.credits, keysRetained: true });
     });

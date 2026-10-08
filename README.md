@@ -4,7 +4,8 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
 
 ## O que está implementado
 
-- Primeiro acesso do proprietário sem usuário. A senha informada é armazenada como hash bcrypt em `data/owner-auth.json`, separado do código e com permissões restritas.
+- Login com um único campo de senha: o proprietário usa sua senha-mestra fixa; cada revendedor usa uma senha individual criada pelo dono. Não há campo de usuário na tela de entrada. O sistema identifica a conta no servidor, rejeita senhas repetidas e nunca envia hashes ou a senha-mestra ao navegador.
+- No primeiro acesso, defina a senha-mestra do dono. Ela é armazenada como hash bcrypt no arquivo separado `data/owner-auth.json`, com permissões restritas. Revendedores continuam aparecendo por usuário na área de administração, mas entram apenas com a própria senha.
 - Contas de revendedor com senha em hash, saldo de créditos e prefixo próprio. O dono pode remover o acesso: o login é bloqueado, a conta sai da lista, o saldo restante fica arquivado e as keys emitidas continuam no Firebase e no histórico. O nome de usuário fica livre para ser cadastrado novamente.
 - O proprietário pode adicionar/remover créditos, editar prefixos e gerir todas as keys. O revendedor pode pausar/retomar, resetar o vínculo ou excluir somente as próprias keys; nenhuma dessas ações altera créditos. Pausar bloqueia a key no app, mas a validade continua correndo. Resetar apenas desvincula o dispositivo e a expiração também continua correndo. Pausa/reset ficam visíveis na tabela e habilitam quando houver vínculo, conforme o gerador de referência.
 - Formato do app de referência: prefixo normalizado para maiúsculas e somente letras/números, hífen e 6 caracteres aleatórios de `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (sem caracteres ambíguos).
@@ -31,12 +32,12 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
    ```
 
    Autorize o acesso a arquivos quando o Android solicitar.
-3. Baixe `keydesk-revendedores-v17.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
+3. Baixe `keydesk-revendedores-v18.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
 
    ```bash
    mkdir -p ~/keydesk-v14
    if [ -d ~/keydesk/key-reseller-panel/data ]; then mkdir -p ~/keydesk-v14/data && cp -an ~/keydesk/key-reseller-panel/data/. ~/keydesk-v14/data/; fi
-   unzip -o ~/storage/downloads/keydesk-revendedores-v17.zip -d ~/keydesk-v14
+   unzip -o ~/storage/downloads/keydesk-revendedores-v18.zip -d ~/keydesk-v14
    cd ~/keydesk-v14
    ```
 
@@ -81,10 +82,10 @@ O `127.0.0.1` só abre no próprio celular; compartilhe o link `https://…loca.
    ```
 
 3. Mantenha o servidor aberto e acesse `http://127.0.0.1:3000`. Não abra `index.html` diretamente.
-4. No primeiro acesso, deixe o campo Usuário vazio e informe a senha do proprietário já fornecida. O painel grava apenas o hash bcrypt no arquivo separado `data/owner-auth.json`.
+4. No primeiro acesso, defina a senha-mestra fixa do dono no único campo. Nos próximos acessos, dono e revendedores informam somente a própria senha; o servidor reconhece o perfil sem solicitar usuário.
 5. Na aba **Revendedores**, crie os acessos, créditos e prefixos.
 
-A senha do proprietário não está embutida no código nem gravada em texto puro no ZIP. O arquivo de autenticação é criado no primeiro acesso.
+A senha do proprietário não está embutida no código, JavaScript, HTML ou ZIP nem é exibida pelo site; somente o hash fica no arquivo de autenticação do servidor. Cada conta de revendedor deve ter uma senha exclusiva. O dono pode redefinir a senha de qualquer revendedor na lista de contas, sem consultar a senha anterior.
 
 ## Publicar o código no GitHub
 
@@ -98,7 +99,9 @@ Ao configurar uma hospedagem HTTPS, configure `HOST=0.0.0.0`, deixe a plataforma
 
 O arquivo `render.yaml` configura um serviço Node.js gratuito. Extraia o ZIP, envie os arquivos ao GitHub e, no Render, crie um **Blueprint** conectado ao repositório que contém `render.yaml`. O Render instalará com `npm ci` e iniciará com `npm start`; depois do deploy, use o endereço `*.onrender.com` exibido no painel.
 
-**Limitações importantes:** o serviço gratuito pode dormir após 15 minutos sem acessos e demorar cerca de um minuto para voltar. Ele não aceita disco persistente e apaga o sistema de arquivos local ao dormir/reiniciar; portanto, o `data/app.sqlite` pode ser perdido — incluindo login do dono, contas e créditos. As keys já enviadas ao Firebase ficam no Firebase, mas o plano grátis não é adequado para dados reais ou uso confiável. Use apenas para testar com contas e créditos fictícios. Para preservar dados, é necessário mudar o armazenamento ou usar hospedagem com disco persistente.
+Para atualizar um serviço Render que já existe, substitua os arquivos do repositório GitHub pelos do ZIP (mantenha todos no diretório raiz), faça commit e, no serviço, escolha **Manual Deploy → Deploy latest commit**. Não crie outro serviço para esta atualização. A migração reconhece hashes antigos e mantém o acesso por senha; os usuários antigos não precisam informar o nome de usuário na tela nova.
+
+**Limitações importantes:** o serviço gratuito pode dormir após 15 minutos sem acessos e demorar cerca de um minuto para voltar. Ele não aceita disco persistente e apaga o sistema de arquivos local ao dormir/reiniciar; portanto, o `data/app.sqlite` e `data/owner-auth.json` podem ser perdidos — incluindo contas e créditos — e o painel pode voltar a solicitar a configuração da senha-mestra. As keys já enviadas ao Firebase ficam no Firebase, mas o plano grátis não é adequado para dados reais ou uso confiável. Use apenas para testar com contas e créditos fictícios. Para preservar dados, é necessário mudar o armazenamento ou usar hospedagem com disco persistente.
 
 ## Acesso por outros dispositivos / hospedagem
 
@@ -114,14 +117,14 @@ Para preservar cadastros, pare o servidor e faça cópia da pasta `data/` (inclu
 
 ## Atualizar instalação no Termux
 
-O ZIP v17 extrai direto na raiz e preserva `data/`. Para atualizar a instalação existente, pare o serviço, faça um backup local dos dados, extraia o ZIP e inicie novamente:
+O ZIP v18 extrai direto na raiz e preserva `data/`. Para atualizar a instalação existente, pare o serviço, faça um backup local dos dados, extraia o ZIP e inicie novamente:
 
 ```bash
 mkdir -p ~/keydesk-v14
 cd ~/keydesk-v14
 bash SERVICO_24H.sh stop
 cp -a data ~/keydesk-data-backup-$(date +%Y%m%d-%H%M%S)
-unzip -o ~/storage/downloads/keydesk-revendedores-v17.zip -d ~/keydesk-v14
+unzip -o ~/storage/downloads/keydesk-revendedores-v18.zip -d ~/keydesk-v14
 pkg install nodejs-lts unzip tmux termux-api -y
 bash SERVICO_24H.sh start
 ```
