@@ -32,12 +32,12 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
    ```
 
    Autorize o acesso a arquivos quando o Android solicitar.
-3. Baixe `keydesk-revendedores-v21.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
+3. Baixe `keydesk-revendedores-render-v22.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
 
    ```bash
    mkdir -p ~/keydesk-v14
    if [ -d ~/keydesk/key-reseller-panel/data ]; then mkdir -p ~/keydesk-v14/data && cp -an ~/keydesk/key-reseller-panel/data/. ~/keydesk-v14/data/; fi
-   unzip -o ~/storage/downloads/keydesk-revendedores-v21.zip -d ~/keydesk-v14
+   unzip -o ~/storage/downloads/keydesk-revendedores-render-v22.zip -d ~/keydesk-v14
    cd ~/keydesk-v14
    ```
 
@@ -119,14 +119,14 @@ Para preservar cadastros, pare o servidor e faça cópia da pasta `data/` (inclu
 
 ## Atualizar instalação no Termux
 
-O ZIP v21 extrai direto na raiz e preserva `data/`. Para atualizar a instalação existente, pare o serviço, faça um backup local dos dados, extraia o ZIP e inicie novamente:
+O ZIP v22 extrai direto na raiz e preserva `data/`. Para atualizar a instalação existente, pare o serviço, faça um backup local dos dados, extraia o ZIP e inicie novamente:
 
 ```bash
 mkdir -p ~/keydesk-v14
 cd ~/keydesk-v14
 bash SERVICO_24H.sh stop
 cp -a data ~/keydesk-data-backup-$(date +%Y%m%d-%H%M%S)
-unzip -o ~/storage/downloads/keydesk-revendedores-v21.zip -d ~/keydesk-v14
+unzip -o ~/storage/downloads/keydesk-revendedores-render-v22.zip -d ~/keydesk-v14
 pkg install nodejs-lts unzip tmux termux-api -y
 bash SERVICO_24H.sh start
 ```
