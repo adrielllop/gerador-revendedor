@@ -5,7 +5,7 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
 ## O que está implementado
 
 - A tela normal pede usuário e senha. Revendedores informam os dois; o único administrador deixa o campo usuário vazio e informa a senha-mestra. Não há conta com usuário `admin`. O servidor identifica o administrador pelo campo vazio e nunca envia hashes ou a senha-mestra ao navegador.
-- No Render, defina `OWNER_PASSWORD` como variável privada do serviço ou grupo de ambiente: o servidor grava somente o hash bcrypt no arquivo separado `data/owner-auth.json`. Se a variável não estiver configurada, o primeiro acesso pede para definir a senha-mestra e também armazena somente o hash. Revendedores aparecem por usuário na área administrativa e entram com o próprio usuário e senha individual.
+- Em uma instalação nova sem `OWNER_PASSWORD`, a primeira visita pede para criar a senha-mestra; depois, apenas o hash bcrypt fica no arquivo separado `data/owner-auth.json`. O dono entra com usuário vazio e essa senha. `OWNER_PASSWORD` é opcional: se configurada como variável privada do servidor, ela pré-registra a mesma senha e pula a tela de configuração inicial. Revendedores aparecem por usuário na área administrativa e entram com o próprio usuário e senha individual.
 - Contas de revendedor com senha em hash, saldo de créditos e prefixo próprio (por padrão, GoldCheats). O dono pode remover o acesso: o login é bloqueado, a conta sai da lista, o saldo restante fica arquivado e as keys emitidas continuam no Firebase e no histórico. O nome de usuário fica livre para ser cadastrado novamente.
 - O proprietário pode adicionar/remover créditos, editar prefixos e gerir todas as keys. O revendedor pode pausar/retomar, resetar o vínculo ou excluir somente as próprias keys; nenhuma dessas ações altera créditos. Pausar bloqueia a key no app, mas a validade continua correndo. Resetar apenas desvincula o dispositivo e a expiração também continua correndo. Pausa/reset ficam visíveis na tabela e habilitam quando houver vínculo, conforme o gerador de referência.
 - Formato do app de referência: prefixo normalizado para maiúsculas e somente letras/números, hífen e 6 caracteres aleatórios de `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (sem caracteres ambíguos).
@@ -32,12 +32,12 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
    ```
 
    Autorize o acesso a arquivos quando o Android solicitar.
-3. Baixe `keydesk-revendedores-v20.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
+3. Baixe `keydesk-revendedores-v21.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
 
    ```bash
    mkdir -p ~/keydesk-v14
    if [ -d ~/keydesk/key-reseller-panel/data ]; then mkdir -p ~/keydesk-v14/data && cp -an ~/keydesk/key-reseller-panel/data/. ~/keydesk-v14/data/; fi
-   unzip -o ~/storage/downloads/keydesk-revendedores-v20.zip -d ~/keydesk-v14
+   unzip -o ~/storage/downloads/keydesk-revendedores-v21.zip -d ~/keydesk-v14
    cd ~/keydesk-v14
    ```
 
@@ -97,11 +97,11 @@ Ao configurar uma hospedagem HTTPS, configure `HOST=0.0.0.0`, deixe a plataforma
 
 ### Render (plano gratuito, para teste)
 
-O arquivo `render.yaml` configura um serviço Node.js gratuito. Extraia o ZIP, envie os arquivos ao GitHub e, no Render, crie um **Blueprint** conectado ao repositório que contém `render.yaml`. O Blueprint pede `OWNER_PASSWORD` como segredo não sincronizado; o Render instalará com `npm ci` e iniciará com `npm start`. Depois do deploy, use o endereço `*.onrender.com` exibido no painel. No login, o administrador deixa Usuário em branco.
+O arquivo `render.yaml` configura um serviço Node.js gratuito sem exigir a senha-mestra no Blueprint. Em uma instalação nova, depois do deploy abra o endereço do painel você mesmo e crie a senha-mestra na primeira tela **antes de compartilhar o link**; a primeira pessoa a concluir essa etapa vira o único administrador. Depois do deploy use o endereço `*.onrender.com` exibido no painel. Nos acessos seguintes, o administrador deixa Usuário em branco.
 
-Para atualizar um serviço Render que já existe, substitua os arquivos do repositório GitHub pelos do ZIP (mantenha todos no diretório raiz), faça commit e, antes do deploy, adicione `OWNER_PASSWORD` em **Environment** (ou no grupo de ambiente conectado) como variável privada. Digite ali sua senha-mestra; não a coloque no GitHub nem em `.env` público. O serviço a converte em hash no arquivo separado. Depois escolha **Manual Deploy → Deploy latest commit** se não iniciar automaticamente. Não crie outro serviço para esta atualização. Hashes antigos de revendedores são reconhecidos: o dono entra com usuário vazio e cada revendedor informa seu usuário e senha.
+Para atualizar um serviço Render que já existe, substitua os arquivos do repositório GitHub pelos do ZIP (mantenha todos no diretório raiz), faça commit e use **Manual Deploy → Deploy latest commit** se não iniciar automaticamente. Não crie outro serviço para esta atualização. Se `OWNER_PASSWORD` já estiver configurada como variável privada, ela continuará sendo a senha-mestra e será convertida em hash no arquivo separado; não a coloque no GitHub. Se já existe uma senha-mestra cadastrada, use-a: a atualização não apaga o dono nem pede nova configuração. Hashes antigos de revendedores são reconhecidos: o dono entra com usuário vazio e cada revendedor informa seu usuário e senha.
 
-**Limitações importantes:** o serviço gratuito pode dormir após 15 minutos sem acessos e demorar cerca de um minuto para voltar. Ele não oferece disco persistente: o `data/app.sqlite` pode ser perdido em reinícios/implantações, incluindo contas e créditos. Se `data/owner-auth.json` for apagado, `OWNER_PASSWORD` privada recria o hash do dono no próximo início; as contas/créditos não são restaurados por essa variável. As keys já enviadas ao Firebase ficam no Firebase. Use o plano grátis apenas para testes com dados fictícios; para preservar dados locais, é necessário armazenamento persistente.
+**Limitações importantes:** o serviço gratuito pode dormir após 15 minutos sem acessos e demorar cerca de um minuto para voltar. Ele não oferece disco persistente: `data/app.sqlite` pode ser perdido, incluindo contas e créditos. Se `data/owner-auth.json` for apagado e `OWNER_PASSWORD` não estiver configurada, a tela de primeira configuração aparecerá novamente — por isso, configure o painel antes de compartilhar o link. Opcionalmente, depois de escolher a senha na tela inicial, cadastre a mesma senha como `OWNER_PASSWORD` privada no Render; nos próximos inícios o hash do dono será recriado, mas contas/créditos não serão restaurados. As keys já enviadas ao Firebase ficam no Firebase. Use o plano grátis apenas para testes com dados fictícios.
 
 Fontes oficiais do Render: [serviços gratuitos](https://render.com/docs/free), [Blueprints](https://render.com/docs/blueprint-spec) e [variáveis de ambiente](https://render.com/docs/configure-environment-variables).
 
@@ -119,14 +119,14 @@ Para preservar cadastros, pare o servidor e faça cópia da pasta `data/` (inclu
 
 ## Atualizar instalação no Termux
 
-O ZIP v20 extrai direto na raiz e preserva `data/`. Para atualizar a instalação existente, pare o serviço, faça um backup local dos dados, extraia o ZIP e inicie novamente:
+O ZIP v21 extrai direto na raiz e preserva `data/`. Para atualizar a instalação existente, pare o serviço, faça um backup local dos dados, extraia o ZIP e inicie novamente:
 
 ```bash
 mkdir -p ~/keydesk-v14
 cd ~/keydesk-v14
 bash SERVICO_24H.sh stop
 cp -a data ~/keydesk-data-backup-$(date +%Y%m%d-%H%M%S)
-unzip -o ~/storage/downloads/keydesk-revendedores-v20.zip -d ~/keydesk-v14
+unzip -o ~/storage/downloads/keydesk-revendedores-v21.zip -d ~/keydesk-v14
 pkg install nodejs-lts unzip tmux termux-api -y
 bash SERVICO_24H.sh start
 ```
