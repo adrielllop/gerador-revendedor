@@ -77,6 +77,22 @@ test('generated active key starts duration only on first device binding', async 
   });
 });
 
+test('generated pending key starts duration only on first device binding', async () => {
+  const createdAt = Date.now()-3_600_000;
+  const durationMs = 1_800_000;
+  const generatedExpiresAt = createdAt + durationMs;
+  await fakeDatabase({ status:'pending', activationStarted:false, boundDeviceId:'', createdAt, durationMs, expiresAt:generatedExpiresAt, remainingMs:durationMs }, async state => {
+    const r = await activateLicense(key, device, 'token');
+    assert.equal((await r.json()).active, true);
+    assert.equal(state().writes, 1);
+    assert.equal(state().current.status, 'active');
+    assert.equal(state().current.boundDeviceId, device);
+    assert.equal(state().current.activationStarted, true);
+    assert.ok(state().current.expiresAt > generatedExpiresAt);
+    assert.equal(state().current.expiresAt, state().current.activatedAt + durationMs);
+  });
+});
+
 test('active unbound after reset accepts a new device without restarting expiration', async () => {
   const expiresAt = Date.now()+180_000;
   const activatedAt = Date.now()-60_000;

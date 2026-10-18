@@ -866,7 +866,7 @@ app.post('/api/keys', requireAuth, csrf, async (req, res) => {
         lastSeenAt: 0,
         paused: false,
         remainingMs: plan.durationMs,
-        status: 'active',
+        status: 'pending',
         unit: plan.unit
       };
       return { value, payload };
