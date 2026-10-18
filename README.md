@@ -36,12 +36,12 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
    ```
 
    Autorize o acesso a arquivos quando o Android solicitar.
-3. Baixe `keydesk-revendedores-logs-ranking-v26.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
+3. Baixe `keydesk-revendedores-design-v27.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
 
    ```bash
    mkdir -p ~/keydesk-v14
    if [ -d ~/keydesk/key-reseller-panel/data ]; then mkdir -p ~/keydesk-v14/data && cp -an ~/keydesk/key-reseller-panel/data/. ~/keydesk-v14/data/; fi
-   unzip -o ~/storage/downloads/keydesk-revendedores-logs-ranking-v26.zip -d ~/keydesk-v14
+   unzip -o ~/storage/downloads/keydesk-revendedores-design-v27.zip -d ~/keydesk-v14
    cd ~/keydesk-v14
    ```
 
@@ -168,7 +168,7 @@ mkdir -p ~/keydesk-v14
 cd ~/keydesk-v14
 bash SERVICO_24H.sh stop
 cp -a data ~/keydesk-data-backup-$(date +%Y%m%d-%H%M%S)
-   unzip -o ~/storage/downloads/keydesk-revendedores-logs-ranking-v26.zip -d ~/keydesk-v14
+   unzip -o ~/storage/downloads/keydesk-revendedores-design-v27.zip -d ~/keydesk-v14
 pkg install nodejs-lts unzip tmux termux-api -y
 bash SERVICO_24H.sh start
 ```
@@ -177,6 +177,8 @@ Se o navegador usar arquivos antigos, atualize a página ou limpe o cache. A int
 
 
 ## Atualização: auditoria, ranking e histórico de recargas
+
+- A versão visual v27 usa uma direção premium consistente em toda a interface (login, navegação escura, painéis, cartões, tabelas e formulários), com ajustes responsivos para celular. Os campos de acesso mostram “Insira o usuário” e “Insira a senha”; o campo do usuário não indica mais “Opcional”.
 
 - O servidor copia cada novo evento de auditoria para `proxyAndroid/keydeskAudit/events`, dentro do Realtime Database. A pasta `keydeskAudit` criada manualmente com `_setup: true` é preservada; os registros entram como filhos de `events`. A área **Atividade** do proprietário carrega os últimos eventos salvos no Firebase e combina-os com a auditoria local, eliminando duplicatas por identificador. Os detalhes enviados ao Firebase são filtrados para não copiar senhas, tokens, chaves completas nem identificadores de dispositivo. Nenhuma nova variável do Render é obrigatória: o caminho padrão já está no código. A conta de serviço existente deve continuar com acesso ao Realtime Database.
 - Na visão geral do proprietário, o ranking lista até 10 revendedores pelo total em reais de recargas com status **pago/confirmado**. Recargas pendentes, expiradas ou estornadas não entram no cálculo.
