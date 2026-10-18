@@ -426,3 +426,42 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .recharge-summary span { font-size: 7px; }
   .recharge-summary strong { font-size: 10px; }
 }
+
+
+/* Polimento visual do painel e ranking de pagamentos */
+.topbar { background: rgba(255,255,255,.92); border-bottom-color: rgba(221,225,239,.9); }
+.page-head { margin-bottom: 29px; }
+.page-head h1 { color: #15182a; }
+.stat-card, .panel { border-color: rgba(224,228,241,.95); border-radius: 19px; box-shadow: 0 8px 24px rgba(27,34,69,.055); }
+.panel { padding: 22px; transition: border-color .2s, box-shadow .2s, transform .2s; }
+.panel:hover { border-color: rgba(196,190,245,.8); box-shadow: 0 13px 34px rgba(27,34,69,.075); }
+.stat-card { background: linear-gradient(145deg, #fff, #fdfdff); }
+.panel-head h3 { letter-spacing: -.035em; }
+.data-table thead th { padding-top: 4px; }
+.data-table tbody tr:hover { background: linear-gradient(90deg, #faf9ff, #fff); }
+.button, .small-button, .text-button, .nav-link, .icon-button { -webkit-tap-highlight-color: transparent; }
+.small-button { transition: color .16s, background .16s, border-color .16s, transform .16s; }
+.small-button:hover { transform: translateY(-1px); }
+.danger-text { color: #b94b63 !important; }
+.danger-text:hover { background: #fff0f3 !important; }
+.ranking-panel { overflow: hidden; background: radial-gradient(ellipse at 100% 0%, rgba(112,87,244,.055), transparent 24rem), #fff; }
+.ranking-list { display: grid; }
+.ranking-row { min-height: 60px; display: flex; align-items: center; gap: 12px; padding: 9px 3px; border-top: 1px solid #f0f1f6; }
+.ranking-row:first-child { border-top: 0; }
+.ranking-position { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border: 1px solid #e9eaf2; border-radius: 10px; color: #858ba0; background: #f8f9fc; font-size: 11px; font-weight: 850; }
+.ranking-position.podium-1 { color: #8d6810; border-color: #f3e5b8; background: linear-gradient(145deg,#fff8de,#fff1bb); }
+.ranking-position.podium-2 { color: #647083; border-color: #e1e6ee; background: linear-gradient(145deg,#f5f7fa,#e9edf3); }
+.ranking-position.podium-3 { color: #9a633d; border-color: #f0ddce; background: linear-gradient(145deg,#fff5ed,#f8e7d8); }
+.ranking-person { min-width: 0; flex: 1; display: grid; gap: 4px; }
+.ranking-person b { overflow: hidden; color: #272b40; font-size: 11px; text-overflow: ellipsis; }
+.ranking-person small { overflow: hidden; color: #9298aa; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.ranking-row > strong { color: #5745cf; font-size: 12px; font-weight: 820; white-space: nowrap; }
+@media (max-width: 720px) {
+  .topbar { gap: 14px; padding-right: 14px; padding-left: 14px; }
+  .panel { padding: 17px; border-radius: 16px; }
+  .page-head { margin-bottom: 21px; }
+  .ranking-row { gap: 9px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
