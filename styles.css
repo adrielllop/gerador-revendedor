@@ -205,6 +205,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .small-button:disabled { opacity: .42; cursor: not-allowed; }
 .danger-text { color: #b14c66; }
 .row-actions { display: flex; align-items: center; gap: 5px; }
+.prefix-edit-form { display: flex; align-items: center; gap: 5px; min-width: 170px; }
+.prefix-edit-form input { width: 120px; min-width: 88px; height: 32px; padding: 0 8px; border: 1px solid #e3e6ef; border-radius: 8px; background: #fff; color: var(--ink); font-size: 10px; outline: none; }
+.prefix-edit-form input:focus { border-color: #a296ff; box-shadow: 0 0 0 3px rgba(112,87,244,.1); }
+.prefix-edit-form button { padding: 7px 8px; }
 .empty-state { min-height: 130px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 22px; color: #9298aa; text-align: center; }
 .empty-icon { margin-bottom: 8px; color: #a89bf2; font-size: 25px; }
 .empty-state b { color: #50566b; font-size: 12px; }

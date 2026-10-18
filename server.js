@@ -456,8 +456,10 @@ function readFirebaseStatus(localKey, remote) {
   else if (Boolean(remote.paused) || remote.status === 'paused') status = 'paused';
   else status = 'active';
   let remainingText = 'Inicia ao conectar';
-  if (started) {
-    const remainingMs = expiresAt ? expiresAt - Date.now() : Number(remote.remainingMs) || 0;
+  const remoteRemainingMs = expiresAt ? expiresAt - Date.now() : Number(remote.remainingMs) || 0;
+  const resetWithRemainingTime = !started && remoteRemainingMs > 0 && Number(remote.durationMs) > 0 && remoteRemainingMs < Number(remote.durationMs);
+  if (started || resetWithRemainingTime) {
+    const remainingMs = remoteRemainingMs;
     if (remainingMs <= 0 && expiresAt) remainingText = 'Expirada';
     else if (remainingMs > 0 && remainingMs < 3600000) remainingText = `${Math.ceil(remainingMs / 60000)} min`;
     else if (remainingMs >= 3600000 && remainingMs < 86400000) remainingText = `${Math.ceil(remainingMs / 3600000)} h`;
@@ -922,12 +924,13 @@ app.post('/api/keys/:id/reset', requireAuth, csrf, async (req, res) => {
     const now = Date.now();
     const expiresAt = Number(remote.expiresAt) || 0;
     const durationMs = Number(remote.durationMs) || 0;
-    // Reset only unbinds the device; preserve expiresAt so the external app's countdown keeps running.
     const remainingMs = expiresAt ? Math.max(0, expiresAt - now) : Number(remote.remainingMs) || durationMs;
+    if (remainingMs <= 0) throw new Error('Esta key já expirou e não pode ser resetada.');
+    // Reset unbinds the old device and restores the pending state accepted for a new activation.
     await firebaseRequest(child, { method: 'PATCH', body: {
-      boundDeviceId: '', boundFingerprint: '', activatedAt: Number(remote.activatedAt) || 0,
-      activationStarted: true, expiresAt, lastSeenAt: 0, remainingMs,
-      paused: Boolean(remote.paused), status: 'active', deviceBindingVersion: 3
+      boundDeviceId: '', boundFingerprint: '', activatedAt: 0,
+      activationStarted: false, expiresAt: 0, lastSeenAt: 0, remainingMs,
+      paused: false, status: 'pending', deviceBindingVersion: 3
     }});
     db.prepare("UPDATE keys SET status='pending', phone=NULL, activated_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);
     audit(req.reseller?.username || req.session.user.username || 'Dono', 'key_reset', { keyId: id, action: 'device_unbound' });
