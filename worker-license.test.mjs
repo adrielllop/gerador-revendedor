@@ -61,6 +61,38 @@ test('active refuses another device', async () => {
   });
 });
 
+test('generated active key starts duration only on first device binding', async () => {
+  const createdAt = Date.now()-3_600_000;
+  const durationMs = 1_800_000;
+  const generatedExpiresAt = createdAt + durationMs;
+  await fakeDatabase({ status:'active', activationStarted:false, boundDeviceId:'', createdAt, durationMs, expiresAt:generatedExpiresAt, remainingMs:durationMs }, async state => {
+    const r = await activateLicense(key, device, 'token');
+    assert.equal((await r.json()).active, true);
+    assert.equal(state().writes, 1);
+    assert.equal(state().current.boundDeviceId, device);
+    assert.equal(state().current.activationStarted, true);
+    assert.ok(state().current.activatedAt >= createdAt);
+    assert.ok(state().current.expiresAt > generatedExpiresAt);
+    assert.equal(state().current.expiresAt, state().current.activatedAt + durationMs);
+  });
+});
+
+test('active unbound after reset accepts a new device without restarting expiration', async () => {
+  const expiresAt = Date.now()+180_000;
+  const activatedAt = Date.now()-60_000;
+  const newDevice = 'device-reset-654321';
+  await fakeDatabase({ status:'active', activationStarted:true, boundDeviceId:'', expiresAt, activatedAt, remainingMs:180_000 }, async state => {
+    const r = await activateLicense(key, newDevice, 'token');
+    assert.equal((await r.json()).active, true);
+    assert.equal(state().writes, 1);
+    assert.equal(state().current.boundDeviceId, newDevice);
+    assert.equal(state().current.activatedAt, activatedAt);
+    assert.equal(state().current.expiresAt, expiresAt);
+    assert.ok(state().current.remainingMs <= 180_000);
+    assert.ok(state().current.remainingMs > 0);
+  });
+});
+
 test('pending activates once and second call does not reset activation', async () => {
   await fakeDatabase({ status:'pending', paused: false, activationStarted: false, boundDeviceId:'', remainingMs: 3600_000 }, async state => {
     const first = await activateLicense(key, device, 'token');

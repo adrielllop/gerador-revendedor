@@ -176,7 +176,27 @@ async function activateLicense(key, deviceId, token, databaseUrl = DEFAULT_DATAB
     const now = Date.now();
 
     if (status === "active") {
-      if (boundDeviceId !== deviceId) return inactive("Licença vinculada a outro dispositivo.");
+      if (!boundDeviceId && record.activationStarted !== true) {
+        const durationMs = Number(record.durationMs ?? record.remainingMs ?? 0);
+        if (!Number.isSafeInteger(durationMs) || durationMs <= 0 || !Number.isSafeInteger(now + durationMs)) {
+          return inactive("Licença sem duração válida.");
+        }
+        if (!etag) throw new Error("database_missing_etag");
+        const activated = {
+          ...record,
+          status: "active",
+          activationStarted: true,
+          activatedAt: now,
+          boundDeviceId: deviceId,
+          expiresAt: now + durationMs,
+          remainingMs: durationMs,
+          lastSeenAt: now,
+        };
+        const write = await conditionalWrite(url, token, etag, activated);
+        if (write.status === 412) continue;
+        if (!write.ok) throw new Error(`database_write_${write.status}`);
+        return json({ success: true, active: true, message: "Licença ativada neste dispositivo." });
+      }
       const expiresAt = Number(record.expiresAt);
       // Fail closed: missing/invalid expiration must never mean unlimited access.
       if (!Number.isSafeInteger(expiresAt) || expiresAt <= now) {
@@ -184,6 +204,15 @@ async function activateLicense(key, deviceId, token, databaseUrl = DEFAULT_DATAB
       }
 
       if (!etag) throw new Error("database_missing_etag");
+      if (!boundDeviceId && record.activationStarted === true) {
+        const rebound = { ...record, boundDeviceId: deviceId, lastSeenAt: now };
+        rebound.remainingMs = Math.max(0, expiresAt - now);
+        const write = await conditionalWrite(url, token, etag, rebound);
+        if (write.status === 412) continue;
+        if (!write.ok) throw new Error(`database_write_${write.status}`);
+        return json({ success: true, active: true, message: "Licença vinculada neste dispositivo; a validade original continua." });
+      }
+      if (boundDeviceId !== deviceId) return inactive("Licença vinculada a outro dispositivo.");
       const updated = { ...record, lastSeenAt: now };
       updated.remainingMs = Math.max(0, expiresAt - now);
       const write = await conditionalWrite(url, token, etag, updated);

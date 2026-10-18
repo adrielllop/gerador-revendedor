@@ -439,6 +439,14 @@ async function firebaseRequest(child = '', options = {}) {
   }
   return payload;
 }
+function actionErrorForUser(req, err) {
+  const message = String(err?.message || 'Operação não concluída.');
+  if (req.session.user?.role === 'reseller' && /(firebase|database|oauth|google|service_account|permission denied)/i.test(message)) {
+    console.error('Falha técnica em ação de key:', message);
+    return 'Não foi possível concluir esta operação agora. Tente novamente mais tarde.';
+  }
+  return message;
+}
 function halfCreditValue(value) {
   const n = Number(value);
   return Number.isFinite(n) && Math.abs(n * 2 - Math.round(n * 2)) < 1e-8 && Math.abs(n) <= 100000000;
@@ -452,8 +460,8 @@ function readFirebaseStatus(localKey, remote) {
   const expiresAt = Number(remote.expiresAt) || 0;
   let status;
   if (started && expiresAt && Date.now() >= expiresAt) status = 'expired';
-  else if (!deviceId) status = 'pending';
   else if (Boolean(remote.paused) || remote.status === 'paused') status = 'paused';
+  else if (!deviceId) status = 'pending';
   else status = 'active';
   let remainingText = 'Inicia ao conectar';
   const remoteRemainingMs = expiresAt ? expiresAt - Date.now() : Number(remote.remainingMs) || 0;
@@ -673,7 +681,9 @@ app.get('/api/dashboard', requireAuth, async (req, res, next) => {
       : db.prepare(`SELECT k.id, k.value, k.status, k.duration_value AS durationValue, k.duration_unit AS durationUnit, k.credit_cost AS creditCost, k.created_at AS createdAt, k.updated_at AS updatedAt FROM keys k JOIN rules ru ON ru.id=k.rule_id WHERE k.reseller_id=? ORDER BY k.id DESC LIMIT 200`).all(req.reseller.id);
     const keys = baseRows.map(key => firebaseAvailable
       ? readFirebaseStatus(key, firebaseKeys[key.value])
-      : { ...key, status: 'sync_error', deviceConnected: false, remainingText: 'Firebase indisponível' });
+      : req.session.user.role === 'owner'
+        ? { ...key, status: 'sync_error', deviceConnected: false, remainingText: 'Firebase indisponível' }
+        : { ...key, deviceConnected: false, remainingText: '—' });
     const plans = DURATION_PLANS.map(({ id, label, duration, unit, cost }) => ({ id, label, duration, unit, cost }));
     if (req.session.user.role === 'owner') {
       res.json({ user: safeUser(req), rules, plans, firebaseAvailable, firebaseError, firebaseKeyCount, firebasePath: `/${FIREBASE_DATABASE_PATH}`,
@@ -691,7 +701,7 @@ app.get('/api/dashboard', requireAuth, async (req, res, next) => {
         audit: db.prepare('SELECT id, actor, action, details, created_at AS createdAt FROM audit ORDER BY id DESC LIMIT 100').all()
       });
     } else {
-      res.json({ user: safeUser(req), rules, plans, firebaseAvailable, firebaseError, firebaseKeyCount, firebasePath: `/${FIREBASE_DATABASE_PATH}`, recharges: rechargeRowsFor(req), keys });
+      res.json({ user: safeUser(req), rules, plans, recharges: rechargeRowsFor(req), keys });
     }
   } catch (err) { next(err); }
 });
@@ -907,7 +917,7 @@ app.post('/api/keys', requireAuth, csrf, async (req, res) => {
     db.prepare("UPDATE keys SET status='pending', updated_at=CURRENT_TIMESTAMP WHERE id IN (" + createdRows.map(() => '?').join(',') + ")").run(...createdRows.map(row => row.id));
     audit(req.reseller.username, 'key_generated', { quantity, planId: plan.id, credits: totalCost, values: createdRows.map(row => row.value) });
     res.status(201).json({ keys: createdRows.map(row => row.value), plan: plan.label, costPerKey: plan.cost, totalCost, credits: reservation.balance, status: 'pending' });
-  } catch (err) { res.status(err.message.includes('Saldo insuficiente') ? 400 : 502).json({ error: err.message }); }
+  } catch (err) { res.status(err.message.includes('Saldo insuficiente') ? 400 : 502).json({ error: actionErrorForUser(req, err) }); }
   finally { generationLocks.delete(resellerId); }
 });
 app.post('/api/keys/:id/reset', requireAuth, csrf, async (req, res) => {
@@ -921,21 +931,18 @@ app.post('/api/keys/:id/reset', requireAuth, csrf, async (req, res) => {
     if (!remote) return res.status(404).json({ error: 'Key não encontrada no aplicativo externo.' });
     const deviceId = String(remote.boundDeviceId || remote.deviceId || '');
     if (!deviceId) throw new Error('Esta key ainda não está conectada a um dispositivo.');
-    const now = Date.now();
     const expiresAt = Number(remote.expiresAt) || 0;
-    const durationMs = Number(remote.durationMs) || 0;
-    const remainingMs = expiresAt ? Math.max(0, expiresAt - now) : Number(remote.remainingMs) || durationMs;
-    if (remainingMs <= 0) throw new Error('Esta key já expirou e não pode ser resetada.');
-    // Reset unbinds the old device and restores the pending state accepted for a new activation.
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) throw new Error('Esta key já expirou ou não tem validade ativa para resetar.');
+    const remainingMs = expiresAt - Date.now();
+    // Reset only clears device identifiers; the original expiration keeps counting down while unbound.
     await firebaseRequest(child, { method: 'PATCH', body: {
-      boundDeviceId: '', boundFingerprint: '', activatedAt: 0,
-      activationStarted: false, expiresAt: 0, lastSeenAt: 0, remainingMs,
-      paused: false, status: 'pending', deviceBindingVersion: 3
+      boundDeviceId: '', boundFingerprint: '', deviceId: '', deviceFingerprint: '',
+      lastSeenAt: 0, remainingMs
     }});
     db.prepare("UPDATE keys SET status='pending', phone=NULL, activated_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?").run(id);
     audit(req.reseller?.username || req.session.user.username || 'Dono', 'key_reset', { keyId: id, action: 'device_unbound' });
     res.json({ value: key.value, remainingMs });
-  } catch (err) { res.status(400).json({ error: err.message }); }
+  } catch (err) { res.status(400).json({ error: actionErrorForUser(req, err) }); }
 });
 app.patch('/api/keys/:id/status', requireAuth, csrf, async (req, res) => {
   try {
@@ -953,7 +960,7 @@ app.patch('/api/keys/:id/status', requireAuth, csrf, async (req, res) => {
     db.prepare('UPDATE keys SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(connected ? status : 'pending', id);
     audit(req.reseller?.username || req.session.user.username || 'Dono', status === 'paused' ? 'key_paused' : 'key_activated', { keyId: id });
     res.json({ ok: true });
-  } catch (err) { res.status(400).json({ error: err.message }); }
+  } catch (err) { res.status(400).json({ error: actionErrorForUser(req, err) }); }
 });
 app.delete('/api/keys/:id', requireAuth, csrf, async (req, res) => {
   try {
@@ -964,7 +971,7 @@ app.delete('/api/keys/:id', requireAuth, csrf, async (req, res) => {
     db.prepare('DELETE FROM keys WHERE id=?').run(id);
     audit(req.reseller?.username || req.session.user.username || 'Dono', 'key_deleted', { keyId: id, value: key.value });
     res.json({ ok: true });
-  } catch (err) { res.status(502).json({ error: err.message }); }
+  } catch (err) { res.status(502).json({ error: actionErrorForUser(req, err) }); }
 });
 app.get(['/', '/index.html'], (req, res) => res.sendFile(path.join(ROOT, 'index.html')));
 app.get('/app.js', (req, res) => res.type('application/javascript').sendFile(path.join(ROOT, 'app.js')));
