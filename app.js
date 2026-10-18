@@ -1,6 +1,9 @@
 const appRoot = document.getElementById('app');
 const toastRegion = document.getElementById('toast-region');
-const state = { user: null, csrf: '', data: null, tab: 'overview', selectedPlan: '1h' };
+let initialTheme = 'light';
+try { initialTheme = localStorage.getItem('keydesk-theme') === 'dark' ? 'dark' : 'light'; } catch {}
+const state = { user: null, csrf: '', data: null, tab: 'overview', selectedPlan: '1h', theme: initialTheme };
+document.documentElement.dataset.theme = state.theme;
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 const date = (v) => v ? new Date(v.replace(' ', 'T') + (v.includes('Z') ? '' : 'Z')).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
 const creditText = (v) => new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(Number(v) || 0);
@@ -62,14 +65,14 @@ function authScreen() {
   let registerMode = false;
   appRoot.innerHTML = `<main class="auth-layout">
     <section class="auth-brand">
-      <div class="auth-brand-head"><div class="brand-mark">K</div><div><b>KEYDESK</b><small>RESELLER CONTROL</small></div></div>
+      <div class="auth-brand-head"><img class="brand-logo-auth" src="./keydesk-logo.png" alt="Logo Keydesk"><div><b>KEYDESK</b><small>RESELLER CONTROL</small></div></div>
       <div class="auth-brand-copy"><div class="eyebrow">CONTROLE DE LICENÇAS</div><h1>Seu painel.<br><span>Sua operação.</span></h1><p>Uma área privada para administrar revendedores, créditos, recargas e keys conectadas ao aplicativo.</p>
         <div class="auth-feature-list"><div class="auth-feature"><span>01</span><div><b>Acessos separados</b><small>Senha individual para cada revendedor</small></div></div><div class="auth-feature"><span>02</span><div><b>Gestão centralizada</b><small>Saldos, recargas e keys em um só lugar</small></div></div><div class="auth-feature"><span>03</span><div><b>Pix com confirmação</b><small>Créditos liberados após pagamento confirmado</small></div></div></div>
       </div>
       <div class="brand-foot"><span class="live-dot"></span> ACESSO PROTEGIDO <i>·</i> CONEXÃO COM FIREBASE</div>
     </section>
     <section class="auth-side"><div class="auth-card">
-      <div class="auth-card-top"><div class="brand-mini"><div class="brand-mark small">K</div><span>KEYDESK</span></div><span class="auth-secure-badge"><i></i> ACESSO SEGURO</span></div>
+      <div class="auth-card-top"><div class="brand-mini"><img class="brand-logo-mark" src="./keydesk-logo.png" alt="Logo Keydesk"><span>KEYDESK</span></div><button class="icon-button theme-toggle" data-action="toggle-theme" type="button" title="Alternar tema claro/escuro" aria-label="Ativar tema ${state.theme==='dark'?'claro':'escuro'}">${state.theme==='dark'?'☀':'◐'}</button><span class="auth-secure-badge"><i></i> ACESSO SEGURO</span></div>
       <div class="auth-intro"><div class="eyebrow">ACESSO</div>
       <h2 id="authTitle">Acesse sua conta</h2>
       <p id="authDescription" class="muted">Entre com seus dados de acesso.</p></div>
@@ -166,21 +169,21 @@ function rechargeBadge(status) {
 }
 function topbar() {
   const owner = state.user.role === 'owner';
-  const tabs = owner ? [['overview','Visão geral'],['resellers','Revendedores'],['recharges','Recargas'],['keys','Keys'],['activity','Atividade']] : [['overview','Visão geral'],['recharges','Recargas'],['keys','Minhas keys']];
-  return `<header class="topbar"><a class="brand-mini" href="#"><div class="brand-mark small">K</div><span>KEYDESK</span></a>
+  const tabs = owner ? [['overview','Visão geral'],['resellers','Revendedores'],['recharges','Recargas'],['ranking','Ranking'],['keys','Keys'],['activity','Atividade']] : [['overview','Visão geral'],['recharges','Recargas'],['keys','Minhas keys']];
+  return `<header class="topbar"><a class="brand-mini" href="#"><img class="brand-logo-mark" src="./keydesk-logo.png" alt="Logo Keydesk"><span>KEYDESK</span></a>
     <nav class="main-nav">${tabs.map(([id,label]) => `<button class="nav-link ${state.tab===id?'selected':''}" data-tab="${id}">${label}</button>`).join('')}</nav>
-    <div class="top-user"><div class="avatar">${owner?'K':esc((state.user.username||'R')[0].toUpperCase())}</div><div class="user-meta"><strong>${owner?'KEYDESK':esc(state.user.username)}</strong><span>Conta</span></div><button class="icon-button" data-action="logout" title="Sair" aria-label="Sair">↗</button></div></header>`;
+    <div class="top-user"><div class="avatar">${owner?'K':esc((state.user.username||'R')[0].toUpperCase())}</div><div class="user-meta"><strong>${owner?'KEYDESK':esc(state.user.username)}</strong><span>Conta</span></div><button class="icon-button theme-toggle" data-action="toggle-theme" title="Alternar tema claro/escuro" aria-label="Ativar tema ${state.theme==='dark'?'claro':'escuro'}">${state.theme==='dark'?'☀':'◐'}</button><button class="icon-button" data-action="logout" title="Sair" aria-label="Sair">↗</button></div></header>`;
 }
 function shell(content) {
   const resellerTools = state.user.role === 'reseller' ? `<div class="head-tools"><div class="credit-pill"><span class="credit-icon">✦</span><div><b>${creditText(state.user.credits)}</b><small>créditos disponíveis</small></div></div><button class="text-button" data-tab="recharges">Adicionar créditos →</button></div>` : '';
   appRoot.innerHTML = `${topbar()}<main class="page"><div class="page-head"><div><div class="eyebrow">KEYDESK</div><h1>${pageTitle()}</h1><p>${pageSubtitle()}</p></div>${resellerTools}</div>${content}<footer class="footer">${state.user.role==='owner'?'KEYDESK · Auditoria local com cópia no Firebase · Keys sincronizadas com Firebase.':'KEYDESK · Painel de revenda.'}</footer></main>`;
 }
 function pageTitle() {
-  const map={ overview:state.user.role==='owner'?'Visão geral':'Olá, '+(state.user.username||'revendedor'), resellers:'Revendedores', recharges:'Recargas', keys:state.user.role==='owner'?'Gerenciar keys':'Minhas keys', activity:'Registro de atividade' };
+  const map={ overview:state.user.role==='owner'?'Visão geral':'Olá, '+(state.user.username||'revendedor'), resellers:'Revendedores', recharges:'Recargas', ranking:'Ranking de recargas', keys:state.user.role==='owner'?'Gerenciar keys':'Minhas keys', activity:'Registro de atividade' };
   return map[state.tab] || 'Painel';
 }
 function pageSubtitle() {
-  const map={ overview:state.user.role==='owner'?'Acompanhe revendedores, saldos e keys em um só lugar.':'Gere keys e acompanhe seu saldo em um só lugar.', resellers:'Crie acessos, ajuste saldos e defina o prefixo de cada revendedor.', recharges:state.user.role==='owner'?'Acompanhe as recargas feitas pelos revendedores.':'Compre créditos via Pix. A cada 10 créditos pagos, 1 é brinde.', keys:state.user.role==='owner'?'Consulte, copie, resete, pause ou remova keys.':'Veja se estão ativas, expiradas ou ainda não iniciadas. Resetar remove só o dispositivo; a validade continua correndo.', activity:'Ações recentes realizadas no painel.' };
+  const map={ overview:state.user.role==='owner'?'Acompanhe revendedores, saldos e keys em um só lugar.':'Gere keys e acompanhe seu saldo em um só lugar.', resellers:'Crie acessos, ajuste saldos e defina o prefixo de cada revendedor.', recharges:state.user.role==='owner'?'Acompanhe as recargas feitas pelos revendedores.':'Compre créditos via Pix. A cada 10 créditos pagos, 1 é brinde.', ranking:'Revendedores ordenados pelo total em dinheiro das recargas confirmadas.', keys:state.user.role==='owner'?'Consulte, copie, resete, pause ou remova keys.':'Veja se estão ativas, expiradas ou ainda não iniciadas. Resetar remove só o dispositivo; a validade continua correndo.', activity:'Ações recentes realizadas no painel.' };
   return map[state.tab] || '';
 }
 function statCard(label,value,sub,icon) { return `<article class="stat-card"><div class="stat-top"><span>${label}</span><span class="stat-icon">${icon}</span></div><div class="stat-number">${value}</div><div class="stat-sub">${sub}</div></article>`; }
@@ -192,6 +195,13 @@ function ownerOverview() {
     <section class="panel"><div class="panel-head"><div><h3>Revendedores</h3><p>Visão rápida dos saldos</p></div><button class="text-button" data-tab="resellers">Gerenciar →</button></div>${state.data.resellers.length?`<div class="mini-list">${state.data.resellers.slice(0,5).map(r=>`<div class="mini-row"><div class="avatar pale">${esc(r.username[0].toUpperCase())}</div><div class="mini-main"><b>${esc(r.username)}</b><small>${esc(r.prefix)}</small></div><strong>${creditText(r.credits)} <small>cr</small></strong></div>`).join('')}</div>`:empty('Sem revendedores','Crie o primeiro acesso na área de revendedores.')}</section></div>
     <section class="panel ranking-panel"><div class="panel-head"><div><span class="eyebrow">RECARGAS CONFIRMADAS</span><h3>Quem mais investiu</h3><p>Ranking pelo total pago em dinheiro, sem contar cobranças pendentes.</p></div><span class="step-chip">TOP 10</span></div>${ranking.length?`<div class="ranking-list">${ranking.map((row,index)=>`<div class="ranking-row"><span class="ranking-position ${index<3?'podium-'+(index+1):''}">${index+1}</span><div class="ranking-person"><b>${esc(row.username)}</b><small>${Number(row.paidRecharges)||0} recarga${Number(row.paidRecharges)===1?'':'s'} paga${Number(row.paidRecharges)===1?'':'s'} · ${creditText(row.creditsReceived)} créditos recebidos</small></div><strong>${money(row.paidAmountCents)}</strong></div>`).join('')}</div>`:empty('Ainda sem recargas pagas','O ranking aparece após a primeira confirmação de pagamento.')}</section>
     ${firebaseNotice}`;
+}
+function rankingPage() {
+  const ranking = state.data.rechargeRanking || [];
+  const totalPaid = ranking.reduce((sum, row) => sum + (Number(row.paidAmountCents) || 0), 0);
+  const confirmedCount = ranking.reduce((sum, row) => sum + (Number(row.paidRecharges) || 0), 0);
+  return `<section class="ranking-hero"><div><span class="eyebrow">DESEMPENHO DE RECARGAS</span><h2>Quem mais investiu</h2><p>Ranking por dinheiro efetivamente pago. Cobranças pendentes e estornadas ficam de fora.</p></div><div class="ranking-hero-stats"><div><small>Total recebido no top 10</small><b>${money(totalPaid)}</b></div><div><small>Recargas confirmadas</small><b>${confirmedCount}</b></div></div></section>
+    <section class="panel ranking-panel ranking-page-panel"><div class="panel-head"><div><span class="eyebrow">RANKING GERAL</span><h3>Revendedores com mais recargas pagas</h3><p>Os valores são somados somente após a confirmação do BotaPix.</p></div><span class="step-chip">${ranking.length} DE 10</span></div>${ranking.length?`<div class="ranking-list">${ranking.map((row,index)=>`<div class="ranking-row ranking-row-large"><span class="ranking-position ${index<3?'podium-'+(index+1):''}">${index+1}</span><div class="ranking-person"><b>${esc(row.username)}</b><small>${Number(row.paidRecharges)||0} recarga${Number(row.paidRecharges)===1?'':'s'} paga${Number(row.paidRecharges)===1?'':'s'} · ${creditText(row.creditsReceived)} créditos recebidos</small></div><strong>${money(row.paidAmountCents)}</strong></div>`).join('')}</div>`:empty('Ainda não há recargas confirmadas','Assim que um Pix for confirmado, o revendedor aparecerá aqui.')}</section>`;
 }
 function resellerOverview() {
   const plans=state.data.plans; const selected=plans.some(p=>p.id===state.selectedPlan)?state.selectedPlan:(state.selectedPlan=plans[0]?.id||'1h');
@@ -240,6 +250,7 @@ function render() {
   if (state.tab==='overview') content=state.user.role==='owner'?ownerOverview():resellerOverview();
   if (state.tab==='resellers') content=resellersPage();
   if (state.tab==='recharges') content=rechargePage();
+  if (state.tab==='ranking' && state.user.role==='owner') content=rankingPage();
   if (state.tab==='keys') content=keysPage();
   if (state.tab==='activity') content=activityPage();
   shell(content);
@@ -262,6 +273,14 @@ appRoot.addEventListener('click', async e => {
   const btn=e.target.closest('[data-action]'); if(!btn)return;
   const id=btn.dataset.id; const action=btn.dataset.action;
   try {
+    if(action==='toggle-theme'){
+      state.theme=state.theme==='dark'?'light':'dark';
+      document.documentElement.dataset.theme=state.theme;
+      try { localStorage.setItem('keydesk-theme',state.theme); } catch {}
+      if(state.user&&state.data) render();
+      else document.querySelectorAll('[data-action="toggle-theme"]').forEach(toggle=>{toggle.textContent=state.theme==='dark'?'☀':'◐';toggle.setAttribute('aria-label',`Ativar tema ${state.theme==='dark'?'claro':'escuro'}`);});
+      return;
+    }
     if(action==='refresh-keys'){
       const original=btn.innerHTML;btn.disabled=true;btn.textContent='Atualizando…';
       try { await loadData(); toast('Lista de keys atualizada.'); }
