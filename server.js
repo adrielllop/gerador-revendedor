@@ -22,6 +22,13 @@ if (FIREBASE_DATABASE_URL.toLowerCase().endsWith(firebasePathSuffix.toLowerCase(
   FIREBASE_DATABASE_URL = FIREBASE_DATABASE_URL.slice(0, -firebasePathSuffix.length).replace(/\/+$/, '');
 }
 const FIREBASE_AUTH_TOKEN = String(process.env.FIREBASE_AUTH_TOKEN || '').trim();
+const FIREBASE_CLIENT_EMAIL = String(process.env.FIREBASE_CLIENT_EMAIL || '').trim();
+const FIREBASE_PRIVATE_KEY = String(process.env.FIREBASE_PRIVATE_KEY || '').trim().replace(/\\n/g, '\n');
+const FIREBASE_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const FIREBASE_OAUTH_SCOPE = 'https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/firebase.database';
+let firebaseAccessTokenCache = '';
+let firebaseAccessTokenExpiresAt = 0;
+let firebaseAccessTokenPending = null;
 const BOTAPIX_API_KEY = String(process.env.BOTAPIX_API_KEY || '').trim();
 const BOTAPIX_WEBHOOK_SECRET = String(process.env.BOTAPIX_WEBHOOK_SECRET || '').trim();
 const BOTAPIX_API_BASE = String(process.env.BOTAPIX_API_BASE || 'https://botapix.com/api/v1').trim().replace(/\/+$/, '');
@@ -338,18 +345,84 @@ function makeKey(prefix, reservedValues = new Set()) {
   reservedValues.add(value);
   return value;
 }
+function base64urlJson(value) {
+  return Buffer.from(JSON.stringify(value)).toString('base64url');
+}
+async function firebaseServiceAccountAccessToken() {
+  if (!FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
+    throw new Error('Configure FIREBASE_CLIENT_EMAIL e FIREBASE_PRIVATE_KEY juntos no Render.');
+  }
+  if (firebaseAccessTokenCache && Date.now() < firebaseAccessTokenExpiresAt - 60000) return firebaseAccessTokenCache;
+  if (firebaseAccessTokenPending) return firebaseAccessTokenPending;
+  firebaseAccessTokenPending = (async () => {
+    const issuedAt = Math.floor(Date.now() / 1000);
+    const header = base64urlJson({ alg: 'RS256', typ: 'JWT' });
+    const claims = base64urlJson({
+      iss: FIREBASE_CLIENT_EMAIL,
+      scope: FIREBASE_OAUTH_SCOPE,
+      aud: FIREBASE_OAUTH_TOKEN_URL,
+      iat: issuedAt,
+      exp: issuedAt + 3600
+    });
+    const unsignedAssertion = `${header}.${claims}`;
+    let signature;
+    try {
+      const privateKey = crypto.createPrivateKey(FIREBASE_PRIVATE_KEY);
+      signature = crypto.sign('RSA-SHA256', Buffer.from(unsignedAssertion), privateKey).toString('base64url');
+    } catch {
+      throw new Error('FIREBASE_PRIVATE_KEY inválida. Copie o valor completo do campo private_key da conta de serviço.');
+    }
+    const assertion = `${unsignedAssertion}.${signature}`;
+    let response;
+    try {
+      response = await fetch(FIREBASE_OAUTH_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+          assertion
+        }),
+        signal: AbortSignal.timeout(8000)
+      });
+    } catch (err) {
+      throw new Error(`Não foi possível obter o token OAuth do Google: ${err.message}`);
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || typeof payload.access_token !== 'string' || !payload.access_token) {
+      const reason = String(payload.error || `HTTP ${response.status}`).slice(0, 100);
+      throw new Error(`O Google recusou a autenticação da conta de serviço (${reason}). Confira FIREBASE_CLIENT_EMAIL e FIREBASE_PRIVATE_KEY.`);
+    }
+    firebaseAccessTokenCache = payload.access_token;
+    const expiresIn = Number(payload.expires_in);
+    firebaseAccessTokenExpiresAt = Date.now() + (Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 3600) * 1000;
+    return firebaseAccessTokenCache;
+  })();
+  try { return await firebaseAccessTokenPending; }
+  finally { firebaseAccessTokenPending = null; }
+}
 function firebaseUrl(child = '') {
   const fullPath = `${FIREBASE_DATABASE_PATH}${child ? `/${child}` : ''}.json`;
-  const url = new URL(fullPath, `${FIREBASE_DATABASE_URL}/`);
-  if (FIREBASE_AUTH_TOKEN) url.searchParams.set('auth', FIREBASE_AUTH_TOKEN);
-  return url;
+  return new URL(fullPath, `${FIREBASE_DATABASE_URL}/`);
 }
 async function firebaseRequest(child = '', options = {}) {
+  const hasServiceAccountEmail = Boolean(FIREBASE_CLIENT_EMAIL);
+  const hasServiceAccountKey = Boolean(FIREBASE_PRIVATE_KEY);
+  if (hasServiceAccountEmail !== hasServiceAccountKey) {
+    throw new Error('Configure FIREBASE_CLIENT_EMAIL e FIREBASE_PRIVATE_KEY juntos no Render.');
+  }
+  const url = firebaseUrl(child);
+  const headers = options.body === undefined ? {} : { 'Content-Type': 'application/json' };
+  if (hasServiceAccountEmail && hasServiceAccountKey) {
+    headers.Authorization = `Bearer ${await firebaseServiceAccountAccessToken()}`;
+  } else if (FIREBASE_AUTH_TOKEN) {
+    // Compatibility fallback for Firebase ID tokens or legacy RTDB secrets.
+    url.searchParams.set('auth', FIREBASE_AUTH_TOKEN);
+  }
   let response;
   try {
-    response = await fetch(firebaseUrl(child), {
+    response = await fetch(url, {
       method: options.method || 'GET',
-      headers: options.body === undefined ? {} : { 'Content-Type': 'application/json' },
+      headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: AbortSignal.timeout(8000)
     });
@@ -359,7 +432,10 @@ async function firebaseRequest(child = '', options = {}) {
   const payload = response.status === 204 ? null : await response.json().catch(() => null);
   if (!response.ok) {
     const reason = typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`;
-    throw new Error(`Firebase recusou a operação (${reason}). Verifique as regras de acesso.`);
+    const hint = /permission denied/i.test(reason)
+      ? ' Confira se a conta de serviço tem acesso ao projeto Firebase e se o banco URL/path estão corretos; não abra regras de escrita publicamente.'
+      : ' Verifique URL, caminho e configuração de autenticação.';
+    throw new Error(`Firebase recusou a operação (${reason}).${hint}`);
   }
   return payload;
 }

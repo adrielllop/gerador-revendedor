@@ -113,7 +113,9 @@ O `render.yaml` já declara as opções abaixo. No Render, abra o serviço → *
 | `OWNER_PASSWORD` | Sua senha de acesso | O Blueprint pede que você preencha em privado. Não compartilhe. |
 | `FIREBASE_DATABASE_URL` | `https://gerador-goldxits-default-rtdb.firebaseio.com` | URL-base pública do Realtime Database. |
 | `FIREBASE_DATABASE_PATH` | `proxyAndroid/keys` | Caminho das keys. |
-| `FIREBASE_AUTH_TOKEN` | Deixar vazio se não for exigido pelas regras | Só use uma credencial Firebase compatível se as regras do banco exigirem autenticação; não coloque aqui a chave privada da conta de serviço Cloudflare. |
+| `FIREBASE_CLIENT_EMAIL` | Campo `client_email` da conta de serviço Firebase | Secret. Use a mesma conta de serviço já configurada no Worker. |
+| `FIREBASE_PRIVATE_KEY` | Campo `private_key` completo da mesma conta | Secret. Copie o valor inteiro, incluindo as linhas BEGIN/END; nunca publique no GitHub. |
+| `FIREBASE_AUTH_TOKEN` | Deixe vazio quando usar a conta de serviço acima | Fallback legado para ID token/secret RTDB compatível; ID tokens expiram. Não use uma API key nem a chave privada neste campo. |
 | `BOTAPIX_API_BASE` | `https://botapix.com/api/v1` | Já definido; mantenha o padrão salvo indicação diferente do provedor. |
 | `BOTAPIX_API_KEY` | API key privada BotaPix | Secret privado. Se já foi compartilhado fora do painel seguro, gere outra. |
 | `BOTAPIX_WEBHOOK_SECRET` | Segredo de assinatura do webhook BotaPix | Secret privado; configure o mesmo valor no provedor. |
@@ -137,7 +139,7 @@ Para testar e publicar o Worker a partir desta mesma raiz, execute `npm ci`, `np
 
 O arquivo `render.yaml` configura um serviço Node.js gratuito e solicita `OWNER_PASSWORD` como variável privada durante a configuração do Blueprint. Informe a senha que você já configurou. Depois do deploy, acesse o endereço `*.onrender.com`. A tela pública de acesso mostra apenas os campos Usuário e Senha; para a conta vinculada a `OWNER_PASSWORD`, deixe Usuário vazio e informe somente a senha configurada.
 
-Para atualizar um serviço Render que já existe, substitua os arquivos do repositório GitHub pelos do ZIP (mantenha todos no diretório raiz), faça commit e use **Manual Deploy → Deploy latest commit** se não iniciar automaticamente. Não crie outro serviço para esta atualização. Em **Environment**, mantenha `OWNER_PASSWORD` com a senha já configurada e acrescente os segredos de pagamento se ainda não estiverem definidos. Não coloque senhas nem chaves privadas no GitHub. Para entrar na conta vinculada à senha `OWNER_PASSWORD`, deixe Usuário vazio e informe somente a senha; os demais acessos usam usuário e senha.
+Para atualizar um serviço Render que já existe, substitua os arquivos do repositório GitHub pelos do ZIP (mantenha todos no diretório raiz), faça commit e use **Manual Deploy → Deploy latest commit** se não iniciar automaticamente. Não crie outro serviço para esta atualização. Em **Environment**, mantenha `OWNER_PASSWORD` com a senha já configurada e preencha `FIREBASE_CLIENT_EMAIL` e `FIREBASE_PRIVATE_KEY` com os campos da conta de serviço Firebase. Não coloque senhas nem chaves privadas no GitHub. Para entrar na conta vinculada à senha `OWNER_PASSWORD`, deixe Usuário vazio e informe somente a senha; os demais acessos usam usuário e senha.
 
 **Limitações importantes:** o serviço gratuito pode dormir após 15 minutos sem acessos e demorar cerca de um minuto para voltar. Ele não oferece disco persistente: `data/app.sqlite` pode ser perdido, incluindo contas e créditos. Se `data/owner-auth.json` for apagado, `OWNER_PASSWORD` privada recria o hash do dono no próximo início; contas e créditos não são restaurados por essa variável. As keys já enviadas ao Firebase ficam no Firebase. Use o plano grátis apenas para testes com dados fictícios.
 
@@ -149,7 +151,7 @@ Por padrão, o servidor escuta somente em `127.0.0.1`, evitando exposição acid
 
 ## Firebase e segurança
 
-A URL/caminho Firebase seguem o arquivo de referência; comunicação é feita pelo servidor do painel, não pelo navegador. Se as regras do Realtime Database exigirem autenticação, copie `.env.example` para `.env` e configure `FIREBASE_AUTH_TOKEN` em privado. O arquivo de referência usava Firebase REST sem token: isso só funciona se as regras do banco permitirem. Não deixe o banco aberto para escrita pública em produção; configure regras restritivas/credenciais apropriadas. As senhas do painel não foram copiadas do JavaScript de referência.
+A comunicação com o Realtime Database é feita pelo servidor, não pelo navegador. O painel obtém e renova em memória um token OAuth2 do Google usando `FIREBASE_CLIENT_EMAIL` e `FIREBASE_PRIVATE_KEY`, e envia esse token no cabeçalho `Authorization: Bearer`. Use os valores da mesma conta de serviço Firebase configurada no Worker, com permissão para acessar esse banco. Não coloque o JSON ou a chave privada no GitHub, `.env` versionado, frontend ou chat. Com a conta de serviço configurada, deixe `FIREBASE_AUTH_TOKEN` vazio. Não abra regras de leitura/escrita publicamente; o token de servidor é usado para operações administrativas da aplicação. O fallback `FIREBASE_AUTH_TOKEN` só serve para um Firebase ID token ou secret RTDB compatível, e tokens de usuário podem expirar. As senhas do painel não foram copiadas do JavaScript de referência.
 
 ## Backup e restauração
 
