@@ -331,12 +331,15 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 #authForm { display: grid; gap: 16px; }
 #authForm .auth-field { margin: 0; }
 #authForm .auth-submit { margin-top: 0 !important; }
+.auth-field[hidden] { display: none; }
+.auth-toggle { width: 100%; margin-top: 10px; padding: 10px; text-align: center; white-space: normal; }
 .auth-input-wrap { position: relative; }
 .auth-input-icon { position: absolute; top: 50%; left: 15px; z-index: 1; color: #7964ec; font-size: 15px; transform: translateY(-50%); }
 .auth-input-wrap input { height: 54px; padding: 0 15px 0 43px; border: 1px solid #e2e5ef; border-radius: 13px; background: #fbfcff; box-shadow: inset 0 1px 2px rgba(19,25,54,.025); font-size: 13px; }
 .auth-input-wrap input:focus { border-color: #9989f4; background: #fff; box-shadow: 0 0 0 4px rgba(112,87,244,.1); }
 .auth-input-wrap input::placeholder { color: #aab0c0; }
 .auth-submit { height: 53px !important; margin-top: 7px !important; border-radius: 13px !important; font-size: 12px !important; }
+.auth-toggle:focus-visible { outline: 3px solid rgba(112,87,244,.28); outline-offset: 2px; }
 .auth-note { align-items: flex-start; gap: 11px; margin-top: 25px; padding: 15px 0 0; border-top: 1px solid #edf0f5; }
 .auth-note-icon { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border-radius: 8px; color: #38816b; background: #eaf8f1; font-size: 12px; font-weight: 850; }
 .auth-note p { display: grid; gap: 4px; margin: 0; }

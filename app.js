@@ -31,6 +31,7 @@ async function loadData() {
 }
 function loading() { appRoot.innerHTML = '<div class="loading-screen"><span class="spinner"></span><p>Preparando seu painel…</p></div>'; }
 function authScreen() {
+  let registerMode = false;
   appRoot.innerHTML = `<main class="auth-layout">
     <section class="auth-brand">
       <div class="auth-brand-head"><div class="brand-mark">K</div><div><b>KEYDESK</b><small>RESELLER CONTROL</small></div></div>
@@ -42,24 +43,64 @@ function authScreen() {
     <section class="auth-side"><div class="auth-card">
       <div class="auth-card-top"><div class="brand-mini"><div class="brand-mark small">K</div><span>KEYDESK</span></div><span class="auth-secure-badge"><i></i> ACESSO SEGURO</span></div>
       <div class="auth-intro"><div class="eyebrow">ACESSO</div>
-      <h2>Acesse sua conta</h2>
-      <p class="muted">Entre com seus dados de acesso.</p></div>
+      <h2 id="authTitle">Acesse sua conta</h2>
+      <p id="authDescription" class="muted">Entre com seus dados de acesso.</p></div>
       <form id="authForm" class="form-stack">
         <label class="auth-field"><span>Usuário</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">@</span><input id="authUsername" name="username" type="text" maxlength="32" autocomplete="username"></div></label>
         <label class="auth-field"><span>Senha</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">▣</span><input id="authPassword" name="password" type="password" required maxlength="128" autocomplete="current-password"></div></label>
-        <button class="button primary full auth-submit" type="submit">Entrar <span>→</span></button>
+        <label id="authConfirmWrap" class="auth-field" hidden><span>Confirme a senha</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">▣</span><input id="authPasswordConfirm" name="confirmPassword" type="password" maxlength="128" autocomplete="new-password"></div></label>
+        <button id="authSubmit" class="button primary full auth-submit" type="submit">Entrar <span>→</span></button>
       </form>
-      <div class="auth-note"><span class="auth-note-icon">✓</span><p><b>Privacidade protegida</b><span>Seus dados de acesso são protegidos.</span></p></div>
+      <button id="authToggle" class="text-button auth-toggle" type="button">Criar cadastro de revendedor</button>
+      <div class="auth-note"><span class="auth-note-icon">✓</span><p><b>Privacidade protegida</b><span id="authNoteText">Seus dados de acesso são protegidos.</span></p></div>
     </div><div class="auth-copyright">KEYDESK <span>·</span> AMBIENTE PRIVADO</div></section>
   </main>`;
+  const formElement = document.getElementById('authForm');
+  const usernameInput = document.getElementById('authUsername');
+  const passwordInput = document.getElementById('authPassword');
+  const confirmInput = document.getElementById('authPasswordConfirm');
+  const confirmWrap = document.getElementById('authConfirmWrap');
+  const submitButton = document.getElementById('authSubmit');
+  const toggleButton = document.getElementById('authToggle');
+  const setMode = register => {
+    registerMode = register;
+    formElement.reset();
+    document.getElementById('authTitle').textContent = register ? 'Criar cadastro' : 'Acesse sua conta';
+    document.getElementById('authDescription').textContent = register
+      ? 'Crie seu acesso para revender. O saldo inicial é de 0 créditos.'
+      : 'Entre com seus dados de acesso.';
+    document.getElementById('authNoteText').textContent = register
+      ? 'Seu cadastro é somente de revendedor.'
+      : 'Seus dados de acesso são protegidos.';
+    usernameInput.required = register;
+    passwordInput.minLength = register ? 10 : 0;
+    passwordInput.autocomplete = register ? 'new-password' : 'current-password';
+    confirmWrap.hidden = !register;
+    confirmInput.required = register;
+    submitButton.innerHTML = register ? 'Criar cadastro <span>→</span>' : 'Entrar <span>→</span>';
+    toggleButton.textContent = register ? 'Já tenho cadastro — entrar' : 'Criar cadastro de revendedor';
+  };
+  toggleButton.addEventListener('click', () => setMode(!registerMode));
   document.getElementById('authForm').addEventListener('submit', async e => {
     e.preventDefault(); const form = new FormData(e.currentTarget);
-    const button = e.currentTarget.querySelector('button'); button.disabled = true; button.textContent = 'Aguarde…';
+    const password = String(form.get('password') || '');
+    const confirmPassword = String(form.get('confirmPassword') || '');
+    if (registerMode && password !== confirmPassword) { toast('As senhas não coincidem.', 'error'); return; }
+    const button = submitButton; button.disabled = true; button.textContent = 'Aguarde…';
     try {
-      const result = await api('/api/login', { method:'POST', body:JSON.stringify({ username:form.get('username'), password:form.get('password') }) });
+      const result = await api(registerMode ? '/api/register' : '/api/login', {
+        method:'POST',
+        body:JSON.stringify(registerMode
+          ? { username:form.get('username'), password, confirmPassword }
+          : { username:form.get('username'), password })
+      });
       state.user = result.user; state.csrf = result.csrfToken; await loadData();
-    } catch(err) { toast(err.message, 'error'); button.disabled = false; button.innerHTML = 'Entrar <span>→</span>'; }
+    } catch(err) {
+      toast(err.message, 'error'); button.disabled = false;
+      button.innerHTML = registerMode ? 'Criar cadastro <span>→</span>' : 'Entrar <span>→</span>';
+    }
   });
+  setMode(false);
 }
 function badge(status) {
   const labels = { active:'Conectada', pending:'Aguardando conexão', paused:'Pausada', expired:'Expirada', not_found:'Não localizada no app', sync_error:'Firebase indisponível' };

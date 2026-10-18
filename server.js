@@ -229,6 +229,7 @@ app.use((req, res, next) => {
   next();
 });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHeaders: true, legacyHeaders: false, message: { error: 'Muitas tentativas. Aguarde 15 minutos e tente novamente.' } });
+const registerLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: { error: 'Limite de cadastros atingido neste momento. Tente novamente mais tarde.' } });
 const generationLocks = new Set();
 const ownerFileExists = () => fs.existsSync(OWNER_FILE);
 const cleanText = (value, max = 80) => String(value ?? '').trim().slice(0, max);
@@ -497,9 +498,10 @@ async function reconcileRecharge(recharge) {
     FROM recharges rc JOIN resellers r ON r.id=rc.reseller_id WHERE rc.id=?`).get(recharge.id);
 }
 
-app.get('/api/bootstrap', (req, res) => res.json({ setupRequired: !ownerFileExists(), csrfToken: req.session.csrfToken }));
+app.get('/api/bootstrap', (req, res) => res.json({ setupRequired: process.env.NODE_ENV !== 'production' && !ownerFileExists(), csrfToken: req.session.csrfToken }));
 app.post('/api/setup', csrf, async (req, res, next) => {
   try {
+    if (process.env.NODE_ENV === 'production') return res.status(403).json({ error: 'Configuração inicial indisponível.' });
     if (ownerFileExists()) return res.status(409).json({ error: 'O painel já foi configurado.' });
     const password = validateOwnerPassword(req.body.password);
     await ensureUniqueAccessPassword(password);
@@ -547,6 +549,30 @@ app.post('/api/login', loginLimiter, csrf, async (req, res, next) => {
       });
     });
   } catch (err) { next(err); }
+});
+app.post('/api/register', registerLimiter, csrf, async (req, res, next) => {
+  try {
+    const username = validateUsername(req.body.username);
+    const password = validatePassword(req.body.password);
+    if (password !== String(req.body.confirmPassword ?? '')) throw new Error('As senhas não coincidem.');
+    await ensureUniqueAccessPassword(password);
+    const result = db.prepare('INSERT INTO resellers (username, password_hash, password_tag, credits, prefix) VALUES (?, ?, ?, 0, ?)')
+      .run(username, await bcrypt.hash(password, 12), passwordTag(password), 'GoldCheats');
+    const user = { role: 'reseller', id: Number(result.lastInsertRowid), username };
+    audit(username, 'reseller_registered', { username });
+    req.session.regenerate(err => {
+      if (err) return next(err);
+      req.session.user = user;
+      req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+      req.session.save(err2 => {
+        if (err2) return next(err2);
+        req.reseller = db.prepare('SELECT id, username, credits, prefix, active FROM resellers WHERE id = ?').get(user.id);
+        res.status(201).json({ user: safeUser(req), csrfToken: req.session.csrfToken });
+      });
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message.includes('UNIQUE') ? 'Esse usuário já existe.' : err.message });
+  }
 });
 app.post('/api/logout', csrf, (req, res) => req.session.destroy(() => res.json({ ok: true })));
 app.get('/api/me', requireAuth, (req, res) => res.json({ user: safeUser(req), csrfToken: req.session.csrfToken }));
