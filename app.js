@@ -25,7 +25,7 @@ async function api(url, options={}) {
   return payload;
 }
 async function loadData() {
-  state.data = await api('/api/dashboard');
+  state.data = await api('/api/dashboard', { cache:'no-store' });
   for (const key of ['keys','resellers','audit','rules','plans','recharges']) if (!Array.isArray(state.data[key])) state.data[key] = [];
   state.user = state.data.user; render();
 }
@@ -74,9 +74,10 @@ function authScreen() {
       <h2 id="authTitle">Acesse sua conta</h2>
       <p id="authDescription" class="muted">Entre com seus dados de acesso.</p></div>
       <form id="authForm" class="form-stack">
-        <label class="auth-field"><span>Usuário</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">@</span><input id="authUsername" name="username" type="text" maxlength="32" autocomplete="off" placeholder="Opcional"></div></label>
+        <label class="auth-field"><span>Usuário</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">@</span><input id="authUsername" name="username" type="text" maxlength="32" autocomplete="username" placeholder="Opcional"></div></label>
         <label class="auth-field"><span>Senha</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">▣</span><input id="authPassword" name="password" type="password" required maxlength="128" autocomplete="current-password"><button class="password-toggle" type="button" data-password-target="authPassword" aria-label="Mostrar senha" aria-pressed="false">Mostrar</button></div></label>
         <label id="authConfirmWrap" class="auth-field" hidden><span>Confirme a senha</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">▣</span><input id="authPasswordConfirm" name="confirmPassword" type="password" maxlength="128" autocomplete="new-password"><button class="password-toggle" type="button" data-password-target="authPasswordConfirm" aria-label="Mostrar senha" aria-pressed="false">Mostrar</button></div></label>
+        <label id="rememberLoginWrap" class="remember-login"><input id="rememberLogin" type="checkbox"><span><b>Lembrar usuário e senha neste dispositivo</b><small>A senha fica protegida no gerenciador do navegador.</small></span></label>
         <button id="authSubmit" class="button primary full auth-submit" type="submit">Entrar <span>→</span></button>
       </form>
       <button id="authToggle" class="text-button auth-toggle" type="button">Criar cadastro de revendedor</button>
@@ -90,6 +91,10 @@ function authScreen() {
   const confirmWrap = document.getElementById('authConfirmWrap');
   const submitButton = document.getElementById('authSubmit');
   const toggleButton = document.getElementById('authToggle');
+  const rememberLoginInput = document.getElementById('rememberLogin');
+  const rememberLoginWrap = document.getElementById('rememberLoginWrap');
+  let savedUsername = '';
+  try { savedUsername = localStorage.getItem('keydesk-remembered-username') || ''; } catch {}
   const setMode = register => {
     registerMode = register;
     formElement.reset();
@@ -101,6 +106,10 @@ function authScreen() {
       ? 'Seu cadastro é somente de revendedor.'
       : 'Seus dados de acesso são protegidos.';
     usernameInput.required = register;
+    usernameInput.autocomplete = 'username';
+    usernameInput.value = register ? '' : savedUsername;
+    rememberLoginWrap.hidden = register;
+    rememberLoginInput.checked = !register && Boolean(savedUsername);
     passwordInput.minLength = register ? 10 : 0;
     passwordInput.autocomplete = register ? 'new-password' : 'current-password';
     confirmWrap.hidden = !register;
@@ -111,6 +120,7 @@ function authScreen() {
   toggleButton.addEventListener('click', () => setMode(!registerMode));
   document.getElementById('authForm').addEventListener('submit', async e => {
     e.preventDefault(); const form = new FormData(e.currentTarget);
+    const username = String(form.get('username') || '').trim();
     const password = String(form.get('password') || '');
     const confirmPassword = String(form.get('confirmPassword') || '');
     if (registerMode && password !== confirmPassword) { toast('As senhas não coincidem.', 'error'); return; }
@@ -119,9 +129,25 @@ function authScreen() {
       const result = await api(registerMode ? '/api/register' : '/api/login', {
         method:'POST',
         body:JSON.stringify(registerMode
-          ? { username:form.get('username'), password, confirmPassword }
-          : { username:form.get('username'), password })
+          ? { username, password, confirmPassword }
+          : { username, password })
       });
+      if (!registerMode) {
+        const remember = rememberLoginInput.checked && Boolean(username);
+        try {
+          if (remember) {
+            localStorage.setItem('keydesk-remembered-username', username);
+            savedUsername = username;
+            if (window.PasswordCredential && navigator.credentials?.store) {
+              const credential = new PasswordCredential({ id: username, password, name: username });
+              await navigator.credentials.store(credential);
+            }
+          } else {
+            localStorage.removeItem('keydesk-remembered-username');
+            savedUsername = '';
+          }
+        } catch {}
+      }
       state.user = result.user; state.csrf = result.csrfToken; await loadData(); await handleRechargeReturn();
     } catch(err) {
       toast(err.message, 'error'); button.disabled = false;
@@ -198,7 +224,7 @@ function resellersPage() {
 function keysPage() {
   const owner=state.user.role==='owner'; const keys=state.data.keys;
   const description=owner?`${keys.length} registro${keys.length===1?'':'s'} visível${keys.length===1?'':'is'}${state.data.firebaseAvailable?' · sincronizado com o app':' · Firebase indisponível'}`:'Copie e gerencie suas keys. O reset só desvincula o dispositivo; a validade continua correndo.';
-  return `<section class="panel"><div class="panel-head"><div><h3>${owner?'Keys emitidas':'Minhas keys'}</h3><p>${description}</p></div><span class="step-chip">${owner?'MONITORAMENTO':'KEYS'}</span></div>${keys.length?keyTable(keys,owner):empty('Nenhuma key encontrada',owner?'As keys geradas pelos revendedores aparecerão aqui.':'Gere sua primeira key na visão geral.')}</section>`;
+  return `<section class="panel"><div class="panel-head"><div><h3>${owner?'Keys emitidas':'Minhas keys'}</h3><p>${description}</p></div><div class="row-actions"><button class="small-button refresh-keys-button" type="button" data-action="refresh-keys">Atualizar lista <span aria-hidden="true">↻</span></button><span class="step-chip">${owner?'MONITORAMENTO':'KEYS'}</span></div></div>${keys.length?keyTable(keys,owner):empty('Nenhuma key encontrada',owner?'As keys geradas pelos revendedores aparecerão aqui.':'Gere sua primeira key na visão geral.')}</section>`;
 }
 function activityPage() {
   const labels={login:'Login realizado',owner_setup:'Acesso do dono configurado',reseller_created:'Revendedor criado',reseller_removed:'Acesso de revendedor removido',reseller_updated:'Conta de revendedor atualizada',credits_adjusted:'Créditos ajustados',recharge_created:'Cobrança Pix criada',recharge_paid:'Recarga confirmada e créditos liberados',recharge_refunded:'Recarga estornada',key_generation_reserved:'Geração iniciada',key_generation_failed:'Geração cancelada · saldo estornado',key_generated:'Key(s) enviada(s) ao app',key_reset:'Dispositivo resetado',key_paused:'Key pausada no app',key_activated:'Key retomada no app',key_deleted:'Key excluída'};
@@ -235,6 +261,12 @@ appRoot.addEventListener('click', async e => {
   const btn=e.target.closest('[data-action]'); if(!btn)return;
   const id=btn.dataset.id; const action=btn.dataset.action;
   try {
+    if(action==='refresh-keys'){
+      const original=btn.innerHTML;btn.disabled=true;btn.textContent='Atualizando…';
+      try { await loadData(); toast('Lista de keys atualizada.'); }
+      catch(err) { btn.disabled=false;btn.innerHTML=original;throw err; }
+      return;
+    }
     if(action==='logout'){await api('/api/logout',{method:'POST'});state.user=null;state.data=null;state.tab='overview';await init();}
     if(action==='open-recharge'){const popup=window.open(btn.dataset.url,'_blank');if(popup)popup.opener=null;else location.href=btn.dataset.url;}
     if(action==='check-recharge'){btn.disabled=true;const out=await api(`/api/recharges/${id}`);await loadData();toast(out.recharge.status==='paid'?'Pagamento confirmado; créditos adicionados.':'Ainda aguardando a confirmação do Pix.');}

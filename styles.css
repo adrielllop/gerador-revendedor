@@ -64,6 +64,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .form-stack input, .form-grid input, .form-grid select { width: 100%; height: 48px; padding: 0 14px; border: 1px solid #e0e4ef; border-radius: 11px; background: #fff; color: var(--ink); outline: none; transition: border-color .18s, box-shadow .18s, background .18s; }
 .form-stack input:focus, .form-grid input:focus, .form-grid select:focus { border-color: #a296ff; box-shadow: 0 0 0 4px rgba(112,87,244,.10); }
 .form-stack input::placeholder, .form-grid input::placeholder { color: #a7aec0; }
+.form-stack label.remember-login { display: flex; align-items: flex-start; gap: 10px; width: fit-content; color: #68708a; font-size: 11px; font-weight: 600; cursor: pointer; }
+.form-stack .remember-login input[type="checkbox"] { flex: 0 0 16px; width: 16px; height: 16px; margin: 2px 0 0; padding: 0; accent-color: var(--violet); }
+.remember-login > span { display: grid; gap: 3px; }
+.remember-login b { color: #4b5167; font-size: 10px; font-weight: 650; }
+.remember-login small { color: #9aa0b2; font-size: 9px; font-weight: 450; }
+.form-stack label.remember-login[hidden] { display: none; }
 .button { min-height: 43px; display: inline-flex; align-items: center; justify-content: center; gap: 14px; padding: 0 18px; border: 0; border-radius: 11px; font-size: 12px; font-weight: 750; transition: transform .17s, box-shadow .17s, background .17s; }
 .button.primary { color: #fff; background: linear-gradient(110deg, #7159f3, #6048e5 70%, #5169e7); box-shadow: 0 8px 18px rgba(100, 75, 224, .23); }
 .button.primary:hover { transform: translateY(-2px); background: linear-gradient(110deg, #7d68fb, #664de7 70%, #5475eb); box-shadow: 0 12px 24px rgba(100,75,224,.28); }
