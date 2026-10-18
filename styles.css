@@ -335,9 +335,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .auth-toggle { width: 100%; margin-top: 10px; padding: 10px; text-align: center; white-space: normal; }
 .auth-input-wrap { position: relative; }
 .auth-input-icon { position: absolute; top: 50%; left: 15px; z-index: 1; color: #7964ec; font-size: 15px; transform: translateY(-50%); }
-.auth-input-wrap input { height: 54px; padding: 0 15px 0 43px; border: 1px solid #e2e5ef; border-radius: 13px; background: #fbfcff; box-shadow: inset 0 1px 2px rgba(19,25,54,.025); font-size: 13px; }
+.auth-input-wrap input { height: 54px; padding: 0 76px 0 43px; border: 1px solid #e2e5ef; border-radius: 13px; background: #fbfcff; box-shadow: inset 0 1px 2px rgba(19,25,54,.025); font-size: 13px; }
 .auth-input-wrap input:focus { border-color: #9989f4; background: #fff; box-shadow: 0 0 0 4px rgba(112,87,244,.1); }
 .auth-input-wrap input::placeholder { color: #aab0c0; }
+.password-field-wrap { position: relative; }
+.password-field-wrap input { padding-right: 76px; }
+.password-toggle { position: absolute; top: 50%; right: 10px; z-index: 2; padding: 7px 8px; transform: translateY(-50%); border: 0; border-radius: 7px; color: #6854dc; background: transparent; font-size: 10px; font-weight: 750; }
+.password-toggle:hover { background: #f0edff; }
+.password-toggle:focus-visible { outline: 2px solid rgba(112,87,244,.35); outline-offset: 1px; }
 .auth-submit { height: 53px !important; margin-top: 7px !important; border-radius: 13px !important; font-size: 12px !important; }
 .auth-toggle:focus-visible { outline: 3px solid rgba(112,87,244,.28); outline-offset: 2px; }
 .auth-note { align-items: flex-start; gap: 11px; margin-top: 25px; padding: 15px 0 0; border-top: 1px solid #edf0f5; }

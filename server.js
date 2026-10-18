@@ -46,6 +46,10 @@ function sessionSecret() {
 function passwordTag(password) {
   return crypto.createHmac('sha256', sessionSecret()).update(String(password)).digest('hex');
 }
+function constantTimeEqual(left, right) {
+  const a = Buffer.from(String(left)); const b = Buffer.from(String(right));
+  return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b);
+}
 function writeOwnerAuthFile(document) {
   const tmp = `${OWNER_FILE}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(document, null, 2), { mode: 0o600, flag: 'w' });
@@ -522,7 +526,9 @@ app.post('/api/login', loginLimiter, csrf, async (req, res, next) => {
     const rawUsername = String(req.body.username ?? '').trim();
     let user = null;
     if (!rawUsername) {
-      if (ownerFileExists()) {
+      if (configuredOwnerPassword && constantTimeEqual(password, configuredOwnerPassword)) {
+        user = { role: 'owner', username: '' };
+      } else if (ownerFileExists()) {
         const owner = JSON.parse(fs.readFileSync(OWNER_FILE, 'utf8'));
         if (owner.passwordHash && await bcrypt.compare(password, owner.passwordHash)) user = { role: 'owner', username: '' };
       }

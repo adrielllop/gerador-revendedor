@@ -29,6 +29,34 @@ async function loadData() {
   for (const key of ['keys','resellers','audit','rules','plans','recharges']) if (!Array.isArray(state.data[key])) state.data[key] = [];
   state.user = state.data.user; render();
 }
+async function handleRechargeReturn() {
+  const params = new URLSearchParams(location.search);
+  const id = params.get('recharge');
+  if (!id || !/^\d{1,12}$/.test(id)) return;
+  history.replaceState({}, '', `${location.pathname}${location.hash}`);
+  state.tab = 'recharges';
+  render();
+  let recharge = null;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      const result = await api(`/api/recharges/${id}`);
+      recharge = result.recharge;
+    } catch (err) {
+      toast(`Não consegui consultar a confirmação do Pix: ${err.message}`, 'error');
+      break;
+    }
+    if (recharge.status === 'paid') {
+      await loadData();
+      toast('Pagamento confirmado. Os créditos foram adicionados ao saldo.');
+      return;
+    }
+    if (recharge.status !== 'pending' || attempt === 9) break;
+    await new Promise(resolve => setTimeout(resolve, 4000));
+  }
+  await loadData();
+  if (recharge?.status === 'pending') toast('O Pix ainda está sendo confirmado. Esta tela continuará atualizando as recargas.');
+  else if (recharge && recharge.status !== 'paid') toast(`Status da recarga: ${recharge.status}.`, 'error');
+}
 function loading() { appRoot.innerHTML = '<div class="loading-screen"><span class="spinner"></span><p>Preparando seu painel…</p></div>'; }
 function authScreen() {
   let registerMode = false;
@@ -46,9 +74,9 @@ function authScreen() {
       <h2 id="authTitle">Acesse sua conta</h2>
       <p id="authDescription" class="muted">Entre com seus dados de acesso.</p></div>
       <form id="authForm" class="form-stack">
-        <label class="auth-field"><span>Usuário</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">@</span><input id="authUsername" name="username" type="text" maxlength="32" autocomplete="username"></div></label>
-        <label class="auth-field"><span>Senha</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">▣</span><input id="authPassword" name="password" type="password" required maxlength="128" autocomplete="current-password"></div></label>
-        <label id="authConfirmWrap" class="auth-field" hidden><span>Confirme a senha</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">▣</span><input id="authPasswordConfirm" name="confirmPassword" type="password" maxlength="128" autocomplete="new-password"></div></label>
+        <label class="auth-field"><span>Usuário</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">@</span><input id="authUsername" name="username" type="text" maxlength="32" autocomplete="off" placeholder="Opcional"></div></label>
+        <label class="auth-field"><span>Senha</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">▣</span><input id="authPassword" name="password" type="password" required maxlength="128" autocomplete="current-password"><button class="password-toggle" type="button" data-password-target="authPassword" aria-label="Mostrar senha" aria-pressed="false">Mostrar</button></div></label>
+        <label id="authConfirmWrap" class="auth-field" hidden><span>Confirme a senha</span><div class="auth-input-wrap"><span class="auth-input-icon" aria-hidden="true">▣</span><input id="authPasswordConfirm" name="confirmPassword" type="password" maxlength="128" autocomplete="new-password"><button class="password-toggle" type="button" data-password-target="authPasswordConfirm" aria-label="Mostrar senha" aria-pressed="false">Mostrar</button></div></label>
         <button id="authSubmit" class="button primary full auth-submit" type="submit">Entrar <span>→</span></button>
       </form>
       <button id="authToggle" class="text-button auth-toggle" type="button">Criar cadastro de revendedor</button>
@@ -94,7 +122,7 @@ function authScreen() {
           ? { username:form.get('username'), password, confirmPassword }
           : { username:form.get('username'), password })
       });
-      state.user = result.user; state.csrf = result.csrfToken; await loadData();
+      state.user = result.user; state.csrf = result.csrfToken; await loadData(); await handleRechargeReturn();
     } catch(err) {
       toast(err.message, 'error'); button.disabled = false;
       button.innerHTML = registerMode ? 'Criar cadastro <span>→</span>' : 'Entrar <span>→</span>';
@@ -158,7 +186,7 @@ function rechargeTable(rows,owner) {
 }
 function resellersPage() {
   const rows=state.data.resellers;
-  return `<section class="panel"><div class="panel-head"><div><h3>Novo revendedor</h3><p>Crie as credenciais e defina o saldo inicial e o prefixo.</p></div><span class="step-chip">ACESSOS</span></div><form id="createReseller" class="form-grid"><label>Usuário<input name="username" required minlength="3" maxlength="32" placeholder="ex.: revendedor01"></label><label>Senha individual<input name="password" required minlength="10" type="password" placeholder="Mínimo de 10 caracteres"></label><label>Créditos iniciais<input name="credits" type="number" min="0" step="0.5" value="0" required></label><label>Qual é o prefixo para gerar?<input name="prefix" maxlength="64" value="GoldCheats" placeholder="Ex.: GoldCheats" required></label><div class="form-action"><button class="button primary" type="submit">Criar revendedor <span>→</span></button></div></form></section>
+  return `<section class="panel"><div class="panel-head"><div><h3>Novo revendedor</h3><p>Crie as credenciais e defina o saldo inicial e o prefixo.</p></div><span class="step-chip">ACESSOS</span></div><form id="createReseller" class="form-grid"><label>Usuário<input name="username" required minlength="3" maxlength="32" placeholder="ex.: revendedor01"></label><label>Senha individual<div class="password-field-wrap"><input id="newResellerPassword" name="password" required minlength="10" type="password" placeholder="Mínimo de 10 caracteres"><button class="password-toggle" type="button" data-password-target="newResellerPassword" aria-label="Mostrar senha" aria-pressed="false">Mostrar</button></div></label><label>Créditos iniciais<input name="credits" type="number" min="0" step="0.5" value="0" required></label><label>Qual é o prefixo para gerar?<input name="prefix" maxlength="64" value="GoldCheats" placeholder="Ex.: GoldCheats" required></label><div class="form-action"><button class="button primary" type="submit">Criar revendedor <span>→</span></button></div></form></section>
   <section class="panel"><div class="panel-head"><div><h3>Contas cadastradas</h3><p>${rows.length} revendedor${rows.length===1?'':'es'} no painel</p></div></div>${rows.length?`<div class="table-wrap"><table class="data-table"><thead><tr><th>USUÁRIO</th><th>SALDO</th><th>PREFIXO</th><th>STATUS</th><th>CADASTRADO</th><th>GERENCIAR</th></tr></thead><tbody>${rows.map(r=>`<tr><td><strong>${esc(r.username)}</strong></td><td><b>${creditText(r.credits)}</b> cr</td><td><code>${esc(r.prefix)}</code></td><td><span class="badge ${r.active?'active':'paused'}"><i></i>${r.active?'Ativo':'Bloqueado'}</span></td><td>${date(r.createdAt)}</td><td><div class="row-actions"><button class="small-button" data-action="add-credit" data-id="${r.id}" data-name="${esc(r.username)}">Adicionar</button><button class="small-button" data-action="remove-credit" data-id="${r.id}" data-name="${esc(r.username)}">Remover créditos</button><button class="small-button" data-action="edit-prefix" data-id="${r.id}" data-prefix="${esc(r.prefix)}">Prefixo</button><button class="small-button" data-action="reset-reseller-password" data-id="${r.id}" data-name="${esc(r.username)}">Redefinir senha</button><button class="small-button danger-text" data-action="remove-reseller" data-id="${r.id}" data-name="${esc(r.username)}">Remover acesso</button></div></td></tr>`).join('')}</tbody></table></div>`:empty('Nenhum revendedor ainda','Use o formulário acima para criar uma conta.')}</section>`;
 }
 function keysPage() {
@@ -192,6 +220,8 @@ function updateRechargePreview() {
   if(amount) amount.textContent=money(credits*100); if(bonusEl) bonusEl.textContent=`+${creditText(bonus)}`; if(total) total.textContent=`${creditText(credits+bonus)} crédito${credits+bonus===1?'':'s'}`;
 }
 appRoot.addEventListener('click', async e => {
+  const passwordToggle=e.target.closest('[data-password-target]');
+  if(passwordToggle){e.preventDefault();const input=document.getElementById(passwordToggle.dataset.passwordTarget);if(input){const visible=input.type==='password';input.type=visible?'text':'password';passwordToggle.textContent=visible?'Ocultar':'Mostrar';passwordToggle.setAttribute('aria-label',`${visible?'Ocultar':'Mostrar'} senha`);passwordToggle.setAttribute('aria-pressed',String(visible));}return;}
   const planPick=e.target.closest('[data-plan-pick]'); if(planPick){state.selectedPlan=planPick.dataset.planPick;const hidden=document.getElementById('planSelect');if(hidden)hidden.value=state.selectedPlan;document.querySelectorAll('[data-plan-pick]').forEach(el=>{const selected=el===planPick;el.classList.toggle('selected',selected);el.setAttribute('aria-pressed',String(selected));});return;}
   const tab=e.target.closest('[data-tab]'); if(tab){state.tab=tab.dataset.tab;render();return;}
   const copy=e.target.closest('[data-copy]'); if(copy){try{await navigator.clipboard.writeText(copy.dataset.copy);toast('Key copiada para a área de transferência.');}catch{toast('Não foi possível copiar neste navegador.','error');}return;}
@@ -244,7 +274,7 @@ async function init() {
   loading();
   try {
     const bootstrap=await api('/api/bootstrap'); state.csrf=bootstrap.csrfToken;
-    try { const me=await api('/api/me'); state.user=me.user; state.csrf=me.csrfToken; await loadData(); }
+    try { const me=await api('/api/me'); state.user=me.user; state.csrf=me.csrfToken; await loadData(); await handleRechargeReturn(); }
     catch { state.user=null;state.data=null;authScreen(); }
   } catch(err){appRoot.innerHTML=`<main class="error-screen"><div class="brand-mark">K</div><h1>Não foi possível abrir o painel</h1><p>${esc(err.message)}</p><p>Confira se o servidor continua ativo e atualize a página.</p></main>`;}
 }
