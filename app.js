@@ -199,7 +199,7 @@ appRoot.addEventListener('click', async e => {
   const id=btn.dataset.id; const action=btn.dataset.action;
   try {
     if(action==='logout'){await api('/api/logout',{method:'POST'});state.user=null;state.data=null;state.tab='overview';await init();}
-    if(action==='open-recharge'){const popup=window.open(btn.dataset.url,'_blank','noopener,noreferrer');if(!popup)location.href=btn.dataset.url;}
+    if(action==='open-recharge'){const popup=window.open(btn.dataset.url,'_blank');if(popup)popup.opener=null;else location.href=btn.dataset.url;}
     if(action==='check-recharge'){btn.disabled=true;const out=await api(`/api/recharges/${id}`);await loadData();toast(out.recharge.status==='paid'?'Pagamento confirmado; créditos adicionados.':'Ainda aguardando a confirmação do Pix.');}
     if(action==='generate'){const planId=document.getElementById('planSelect')?.value;const quantity=Number(document.getElementById('keyQuantity')?.value||1);btn.disabled=true;const out=await api('/api/keys',{method:'POST',body:JSON.stringify({planId,quantity})});await loadData();toast(`${out.keys.length} key(s) gravada(s) no Firebase (${out.plan}) · custo ${creditText(out.totalCost)} crédito(s).`);}
     if(action==='add-credit'||action==='remove-credit'){const adding=action==='add-credit';const amount=prompt(`Quantos créditos deseja ${adding?'adicionar ao':'remover do'} saldo de ${btn.dataset.name}? Use incrementos de 0,5.`);if(amount===null)return;const quantity=Number(String(amount).replace(',','.'));if(!Number.isFinite(quantity)||quantity<=0||Math.abs(quantity*2-Math.round(quantity*2))>1e-8)throw new Error('Informe uma quantidade maior que zero, em incrementos de 0,5.');const reason=prompt('Motivo do ajuste:','Ajuste manual')||'Ajuste manual';const delta=adding?quantity:-quantity;await api(`/api/resellers/${id}/credits`,{method:'PATCH',body:JSON.stringify({delta,reason})});await refresh(adding?'Créditos adicionados.':'Créditos removidos.');}
@@ -218,11 +218,12 @@ appRoot.addEventListener('submit', async e => {
     if(form.id==='createReseller'){e.preventDefault();await api('/api/resellers',{method:'POST',body:JSON.stringify(formObject(form))});form.reset();await refresh('Revendedor criado.');}
     if(form.id==='rechargeForm'){
       e.preventDefault(); const button=form.querySelector('button[type="submit"]'); button.disabled=true;
-      const paymentWindow=window.open('', '_blank', 'noopener,noreferrer');
+      const paymentWindow=window.open('about:blank', '_blank');
+      if(paymentWindow) paymentWindow.opener=null;
       try {
         const out=await api('/api/recharges',{method:'POST',body:JSON.stringify({credits:Number(form.elements.credits.value)})});
         await loadData();
-        if(paymentWindow) paymentWindow.location=out.paymentUrl; else location.href=out.paymentUrl;
+        if(paymentWindow) paymentWindow.location.replace(out.paymentUrl); else location.href=out.paymentUrl;
         toast(`Cobrança de ${money(out.amountCents)} criada. Pague no Pix para receber ${creditText(out.totalCredits)} créditos.`);
       } catch(err) { if(paymentWindow) paymentWindow.close(); throw err; } finally { button.disabled=false; }
     }
