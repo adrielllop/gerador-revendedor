@@ -42,6 +42,7 @@ const DURATION_PLANS = [
   { id: '15d', label: '15 dias', duration: 15, unit: 'days', durationMs: 1296000000, cost: 10 },
   { id: '30d', label: '30 dias', duration: 30, unit: 'days', durationMs: 2592000000, cost: 15 }
 ];
+const RESELLER_PREFIX_COST = 5;
 fs.mkdirSync(DATA, { recursive: true, mode: 0o700 });
 function sessionSecret() {
   if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
@@ -717,6 +718,27 @@ app.post('/api/resellers', requireAuth, requireOwner, csrf, async (req, res) => 
     audit(req.session.user.username || 'Dono', 'reseller_created', { reseller: username, credits, prefix });
     res.status(201).json({ id: Number(result.lastInsertRowid) });
   } catch (err) { res.status(400).json({ error: err.message.includes('UNIQUE') ? 'Esse usuário já existe.' : err.message }); }
+});
+app.post('/api/reseller/prefix', requireAuth, csrf, (req, res) => {
+  if (req.session.user.role !== 'reseller') return res.status(403).json({ error: 'Operação não disponível para esta conta.' });
+  try {
+    const prefix = normalizePrefix(validatePrefix(req.body.prefix));
+    const update = db.transaction(() => {
+      const reseller = db.prepare('SELECT id, username, credits, prefix FROM resellers WHERE id=? AND active=1 AND removed_at IS NULL').get(req.reseller.id);
+      if (!reseller) throw new Error('Conta não encontrada.');
+      if (normalizePrefix(reseller.prefix) === prefix) {
+        return { ok: true, changed: false, prefix: reseller.prefix, credits: reseller.credits, cost: 0 };
+      }
+      const otherPrefixes = db.prepare('SELECT id, prefix FROM resellers WHERE id<>? AND active=1 AND removed_at IS NULL').all(reseller.id);
+      if (otherPrefixes.some(row => normalizePrefix(row.prefix) === prefix)) throw new Error('Esse prefixo já está em uso. Escolha outro.');
+      if (reseller.credits < RESELLER_PREFIX_COST) throw new Error('Saldo insuficiente. Definir ou trocar o prefixo custa 5 créditos.');
+      const balance = roundCredits(reseller.credits - RESELLER_PREFIX_COST);
+      db.prepare('UPDATE resellers SET prefix=?, credits=? WHERE id=?').run(prefix, balance, reseller.id);
+      audit(reseller.username, 'reseller_prefix_changed', { previousPrefix: reseller.prefix, prefix, cost: RESELLER_PREFIX_COST, balance });
+      return { ok: true, changed: true, prefix, credits: balance, cost: RESELLER_PREFIX_COST };
+    });
+    res.json(update());
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 app.patch('/api/resellers/:id/credits', requireAuth, requireOwner, csrf, (req, res) => {
   try {

@@ -130,8 +130,8 @@ function authScreen() {
   });
   setMode(false);
 }
-function badge(status) {
-  const labels = { active:'Conectada', pending:'Aguardando conexão', paused:'Pausada', expired:'Expirada', not_found:'Não localizada no app', sync_error:'Firebase indisponível' };
+function badge(status, reseller=false) {
+  const labels = { active:'Ativa', pending:'Ainda não iniciada', paused:'Pausada', expired:'Expirada', not_found:reseller?'Ainda não iniciada':'Não localizada no app', sync_error:reseller?'Status indisponível':'Firebase indisponível' };
   return `<span class="badge ${esc(status)}"><i></i>${labels[status] || esc(status)}</span>`;
 }
 function rechargeBadge(status) {
@@ -154,7 +154,7 @@ function pageTitle() {
   return map[state.tab] || 'Painel';
 }
 function pageSubtitle() {
-  const map={ overview:state.user.role==='owner'?'Acompanhe revendedores, saldos e keys em um só lugar.':'Gere keys e acompanhe seu saldo em um só lugar.', resellers:'Crie acessos, ajuste saldos e defina o prefixo de cada revendedor.', recharges:state.user.role==='owner'?'Acompanhe as recargas feitas pelos revendedores.':'Compre créditos via Pix. A cada 10 créditos pagos, 1 é brinde.', keys:state.user.role==='owner'?'Consulte, copie, resete, pause ou remova keys.':'Gerencie suas keys. Resetar remove só o dispositivo; a validade continua correndo.', activity:'Ações recentes realizadas no painel.' };
+  const map={ overview:state.user.role==='owner'?'Acompanhe revendedores, saldos e keys em um só lugar.':'Gere keys e acompanhe seu saldo em um só lugar.', resellers:'Crie acessos, ajuste saldos e defina o prefixo de cada revendedor.', recharges:state.user.role==='owner'?'Acompanhe as recargas feitas pelos revendedores.':'Compre créditos via Pix. A cada 10 créditos pagos, 1 é brinde.', keys:state.user.role==='owner'?'Consulte, copie, resete, pause ou remova keys.':'Veja se estão ativas, expiradas ou ainda não iniciadas. Resetar remove só o dispositivo; a validade continua correndo.', activity:'Ações recentes realizadas no painel.' };
   return map[state.tab] || '';
 }
 function statCard(label,value,sub,icon) { return `<article class="stat-card"><div class="stat-top"><span>${label}</span><span class="stat-icon">${icon}</span></div><div class="stat-number">${value}</div><div class="stat-sub">${sub}</div></article>`; }
@@ -169,11 +169,12 @@ function ownerOverview() {
 function resellerOverview() {
   const plans=state.data.plans; const selected=plans.some(p=>p.id===state.selectedPlan)?state.selectedPlan:(state.selectedPlan=plans[0]?.id||'1h');
   return `<section class="reseller-hero"><div><div class="eyebrow">SEU SALDO DISPONÍVEL</div><h2>${creditText(state.user.credits)} <span>créditos</span></h2><p>Compre créditos na aba Recargas e ganhe 1 bônus a cada 10 pagos.</p></div><div class="hero-star">✦</div><div class="hero-orbit"></div></section>
+  <section class="panel prefix-purchase-panel"><div class="panel-head"><div><span class="eyebrow">PREFIXO PERSONALIZADO</span><h3>Use sua própria marca nas keys</h3><p>Atual: <code>${esc(state.user.prefix)}</code>. Definir ou trocar custa 5 créditos por alteração.</p></div><span class="step-chip">5 CRÉDITOS</span></div><form id="resellerPrefixForm" class="prefix-purchase-form"><label>Novo prefixo<input name="prefix" type="text" maxlength="64" placeholder="Ex.: MinhaMarca" required></label><button class="button secondary" type="submit">Confirmar por 5 créditos <span>→</span></button></form><div class="format-note"><span>✦</span><p>O prefixo novo será usado nas próximas keys. O valor é descontado do seu saldo ao confirmar.</p></div></section>
   <section class="panel generate-panel"><div class="panel-head"><div><span class="eyebrow">GERADOR</span><h3>Escolha sua validade</h3><p>Prefixo individual <code>${esc(state.user.prefix)}</code> · o app controla a ativação</p></div><span class="step-chip">LOTE DE KEYS</span></div>
   <input id="planSelect" type="hidden" value="${esc(selected)}"><div class="duration-plans">${plans.map(p=>`<button type="button" class="duration-option ${selected===p.id?'selected':''}" data-plan-pick="${esc(p.id)}" aria-pressed="${selected===p.id}"><span class="duration-label">${esc(p.label)}</span><strong>${creditText(p.cost)}</strong><small>${p.cost===1?'crédito':'créditos'} / key</small></button>`).join('')}</div>
   <div class="generate-controls"><label>Quantidade<input id="keyQuantity" type="number" min="1" max="100" step="1" value="1"></label><button class="button primary generate-submit" data-action="generate">Gerar e enviar ao app <span>→</span></button></div>
   <div class="format-note"><span>✳</span><p><b>Formato:</b> prefixo em maiúsculas + hífen + 6 letras/números aleatórios. Ex.: <code>GOLDCHEATS-A7K9Q2</code></p></div></section>
-  <section class="panel"><div class="panel-head"><div><span class="eyebrow">HISTÓRICO</span><h3>Suas keys</h3><p>Copie ou gerencie suas keys.</p></div><button class="text-button" data-tab="keys">Ver todas →</button></div>${state.data.keys.length?keyTable(state.data.keys.slice(0,5),false):empty('Ainda não há keys','As keys que você gerar aparecerão aqui.')}</section>`;
+  <section class="panel"><div class="panel-head"><div><span class="eyebrow">HISTÓRICO</span><h3>Suas keys</h3><p>Veja o status e copie ou gerencie suas keys.</p></div><button class="text-button" data-tab="keys">Ver todas →</button></div>${state.data.keys.length?keyTable(state.data.keys.slice(0,5),false):empty('Ainda não há keys','As keys que você gerar aparecerão aqui.')}</section>`;
 }
 function rechargePage() {
   const owner=state.user.role==='owner'; const rows=state.data.recharges;
@@ -245,6 +246,7 @@ appRoot.addEventListener('submit', async e => {
   const form=e.target;
   try {
     if(form.matches('[data-prefix-form]')){e.preventDefault();const id=form.dataset.id;const prefix=String(new FormData(form).get('prefix')||'').trim();if(!prefix)throw new Error('Informe um prefixo válido.');const button=form.querySelector('button[type="submit"]');if(button)button.disabled=true;try{await api(`/api/resellers/${id}`,{method:'PATCH',body:JSON.stringify({prefix})});await refresh('Prefixo atualizado; vale para as próximas keys.');}finally{if(button)button.disabled=false;}}
+    if(form.id==='resellerPrefixForm'){e.preventDefault();const prefix=String(new FormData(form).get('prefix')||'').trim();if(!prefix)throw new Error('Informe o prefixo desejado.');if(!confirm('Definir ou trocar seu prefixo por 5 créditos? O valor será descontado do seu saldo agora.'))return;const button=form.querySelector('button[type="submit"]');if(button)button.disabled=true;try{const result=await api('/api/reseller/prefix',{method:'POST',body:JSON.stringify({prefix})});await loadData();toast(result.changed?'Prefixo atualizado; 5 créditos descontados.':'Esse prefixo já está ativo; nenhum crédito foi descontado.');}finally{if(button)button.disabled=false;}}
     if(form.id==='createReseller'){e.preventDefault();await api('/api/resellers',{method:'POST',body:JSON.stringify(formObject(form))});form.reset();await refresh('Revendedor criado.');}
     if(form.id==='rechargeForm'){
       e.preventDefault(); const button=form.querySelector('button[type="submit"]'); button.disabled=true;
@@ -279,8 +281,8 @@ async function init() {
   } catch(err){appRoot.innerHTML=`<main class="error-screen"><div class="brand-mark">K</div><h1>Não foi possível abrir o painel</h1><p>${esc(err.message)}</p><p>Confira se o servidor continua ativo e atualize a página.</p></main>`;}
 }
 function keyTable(keys,owner) {
-  const statusHeaders=owner?'<th>STATUS NO APP</th><th>TEMPO RESTANTE</th>':'';
-  return `<div class="table-wrap"><table class="data-table"><thead><tr><th>KEY</th>${owner?'<th>REVENDEDOR</th>':''}<th>VALIDADE</th>${statusHeaders}<th>GERADA EM</th><th>AÇÕES</th></tr></thead><tbody>${keys.map(k=>{const connected=Boolean(k.deviceConnected);const pauseAction=k.status==='paused'?'activate':'pause';const pauseLabel=k.status==='paused'?'Retomar':'Pausar';const canPause=k.status==='paused'||(connected&&k.status==='active');const statusCells=owner?`<td>${badge(k.status)}</td><td>${esc(k.remainingText||'—')}</td>`:'';return `<tr><td><button class="key-copy" data-copy="${esc(k.value)}" title="Clique para copiar"><code>${esc(k.value)}</code><span>Copiar</span></button></td>${owner?`<td><strong>${esc(k.reseller)}</strong><small class="cell-sub">${esc(k.prefix)}</small></td>`:''}<td>${durationText(k)}</td>${statusCells}<td>${date(k.createdAt)}</td><td><div class="row-actions"><button class="small-button" data-action="${pauseAction}" data-id="${k.id}" ${canPause?'':'disabled title="Disponível após conexão e enquanto a key estiver ativa no app"'}>${pauseLabel}</button><button class="small-button" data-action="reset" data-id="${k.id}" ${connected?'':'disabled title="Disponível após vincular um dispositivo"'}>Resetar dispositivo</button><button class="small-button danger-text" data-action="delete-key" data-id="${k.id}">Excluir</button></div></td></tr>`}).join('')}</tbody></table></div>`;
+  const statusHeaders=`<th>STATUS</th>${owner?'<th>TEMPO RESTANTE</th>':''}`;
+  return `<div class="table-wrap"><table class="data-table"><thead><tr><th>KEY</th>${owner?'<th>REVENDEDOR</th>':''}<th>VALIDADE</th>${statusHeaders}<th>GERADA EM</th><th>AÇÕES</th></tr></thead><tbody>${keys.map(k=>{const connected=Boolean(k.deviceConnected);const pauseAction=k.status==='paused'?'activate':'pause';const pauseLabel=k.status==='paused'?'Retomar':'Pausar';const canPause=k.status==='paused'||(connected&&k.status==='active');const statusCells=`<td>${badge(k.status,!owner)}</td>${owner?`<td>${esc(k.remainingText||'—')}</td>`:''}`;return `<tr><td><button class="key-copy" data-copy="${esc(k.value)}" title="Clique para copiar"><code>${esc(k.value)}</code><span>Copiar</span></button></td>${owner?`<td><strong>${esc(k.reseller)}</strong><small class="cell-sub">${esc(k.prefix)}</small></td>`:''}<td>${durationText(k)}</td>${statusCells}<td>${date(k.createdAt)}</td><td><div class="row-actions"><button class="small-button" data-action="${pauseAction}" data-id="${k.id}" ${canPause?'':'disabled title="Disponível após conexão e enquanto a key estiver ativa no app"'}>${pauseLabel}</button><button class="small-button" data-action="reset" data-id="${k.id}" ${connected?'':'disabled title="Disponível após vincular um dispositivo"'}>Resetar dispositivo</button><button class="small-button danger-text" data-action="delete-key" data-id="${k.id}">Excluir</button></div></td></tr>`}).join('')}</tbody></table></div>`;
 }
 
 init();

@@ -209,6 +209,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .prefix-edit-form input { width: 120px; min-width: 88px; height: 32px; padding: 0 8px; border: 1px solid #e3e6ef; border-radius: 8px; background: #fff; color: var(--ink); font-size: 10px; outline: none; }
 .prefix-edit-form input:focus { border-color: #a296ff; box-shadow: 0 0 0 3px rgba(112,87,244,.1); }
 .prefix-edit-form button { padding: 7px 8px; }
+.prefix-purchase-form { display: grid; grid-template-columns: minmax(160px,1fr) auto; align-items: end; gap: 12px; }
+.prefix-purchase-form label { display: grid; gap: 7px; color: #4c5267; font-size: 10px; font-weight: 720; }
+.prefix-purchase-form input { width: 100%; height: 47px; padding: 0 13px; border: 1px solid #e0e4ef; border-radius: 11px; color: var(--ink); background: #fff; outline: none; }
+.prefix-purchase-form input:focus { border-color: #a296ff; box-shadow: 0 0 0 4px rgba(112,87,244,.10); }
+.prefix-purchase-form .button { min-height: 47px; white-space: nowrap; }
 .empty-state { min-height: 130px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 22px; color: #9298aa; text-align: center; }
 .empty-icon { margin-bottom: 8px; color: #a89bf2; font-size: 25px; }
 .empty-state b { color: #50566b; font-size: 12px; }
@@ -274,6 +279,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .duration-option { min-height: 92px; padding: 12px; border-radius: 12px; }
   .duration-option:last-child { grid-column: 1 / -1; min-height: 78px; }
   .duration-option strong { font-size: 22px; }
+  .prefix-purchase-form { grid-template-columns: 1fr; }
+  .prefix-purchase-form .button { width: 100%; }
   .generate-controls { grid-template-columns: minmax(90px, .38fr) minmax(0, 1fr); gap: 9px; }
   .generate-controls input { height: 45px; }
   .generate-submit { min-height: 45px; padding: 0 11px; gap: 7px; font-size: 10px; }
