@@ -15,6 +15,7 @@ const OWNER_FILE = path.join(DATA, 'owner-auth.json');
 const DB_FILE = path.join(DATA, 'app.sqlite');
 const SESSION_SECRET_FILE = path.join(DATA, 'session-secret');
 const FIREBASE_DATABASE_PATH = String(process.env.FIREBASE_DATABASE_PATH || 'proxyAndroid/keys').replace(/^\/+|\/+$/g, '');
+const FIREBASE_AUDIT_PATH = String(process.env.FIREBASE_AUDIT_PATH || 'proxyAndroid/keydeskAudit/events').replace(/^\/+|\/+$/g, '');
 let FIREBASE_DATABASE_URL = String(process.env.FIREBASE_DATABASE_URL || 'https://gerador-goldxits-default-rtdb.firebaseio.com').trim().replace(/\/+$/, '').replace(/\.json$/i, '');
 // Tolerate an older .env that already included the Firebase path or .json suffix.
 const firebasePathSuffix = `/${FIREBASE_DATABASE_PATH}`;
@@ -178,6 +179,7 @@ db.exec(`
     payment_url TEXT,
     provider_status TEXT,
     paid_at TEXT,
+    reseller_hidden_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -189,6 +191,8 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 `);
+const rechargeColumns = new Set(db.prepare('PRAGMA table_info(recharges)').all().map(column => column.name));
+if (!rechargeColumns.has('reseller_hidden_at')) db.exec('ALTER TABLE recharges ADD COLUMN reseller_hidden_at TEXT');
 const resellerColumns = new Set(db.prepare('PRAGMA table_info(resellers)').all().map(column => column.name));
 if (!resellerColumns.has('former_username')) db.exec('ALTER TABLE resellers ADD COLUMN former_username TEXT');
 if (!resellerColumns.has('removed_at')) db.exec('ALTER TABLE resellers ADD COLUMN removed_at TEXT');
@@ -252,10 +256,30 @@ app.use((req, res, next) => {
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHeaders: true, legacyHeaders: false, message: { error: 'Muitas tentativas. Aguarde 15 minutos e tente novamente.' } });
 const registerLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: { error: 'Limite de cadastros atingido neste momento. Tente novamente mais tarde.' } });
 const generationLocks = new Set();
+const pendingFirebaseAuditWrites = new Set();
 const ownerFileExists = () => fs.existsSync(OWNER_FILE);
 const cleanText = (value, max = 80) => String(value ?? '').trim().slice(0, max);
+function sanitizeAuditDetails(value) {
+  if (Array.isArray(value)) return value.map(sanitizeAuditDetails);
+  if (!value || typeof value !== 'object') return value;
+  const result = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (/(password|secret|private|token|device|fingerprint|phone|^values?$)/i.test(key)) continue;
+    result[key] = sanitizeAuditDetails(item);
+  }
+  return result;
+}
 function audit(actor, action, details = {}) {
-  db.prepare('INSERT INTO audit (actor, action, details) VALUES (?, ?, ?)').run(actor, action, JSON.stringify(details));
+  const eventId = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  const localDetails = { ...details, eventId, createdAt };
+  db.prepare('INSERT INTO audit (actor, action, details) VALUES (?, ?, ?)').run(actor, action, JSON.stringify(localDetails));
+  const cloudEvent = { eventId, actor: String(actor || ''), action: String(action || ''), details: sanitizeAuditDetails(details), createdAt };
+  const write = firebaseRequestAtPath(FIREBASE_AUDIT_PATH, { method: 'POST', body: cloudEvent });
+  pendingFirebaseAuditWrites.add(write);
+  write.catch(err => console.error('Falha ao copiar evento de auditoria para o Firebase:', err.message))
+    .finally(() => pendingFirebaseAuditWrites.delete(write));
+  return eventId;
 }
 function csrf(req, res, next) {
   const supplied = req.get('x-csrf-token') || '';
@@ -411,21 +435,25 @@ async function firebaseServiceAccountAccessToken() {
   finally { firebaseAccessTokenPending = null; }
 }
 function firebaseUrl(child = '') {
-  const fullPath = `${FIREBASE_DATABASE_PATH}${child ? `/${child}` : ''}.json`;
-  return new URL(fullPath, `${FIREBASE_DATABASE_URL}/`);
+  const fullPath = `${FIREBASE_DATABASE_PATH}${child ? `/${child}` : ''}`;
+  return firebaseUrlForPath(fullPath);
 }
-async function firebaseRequest(child = '', options = {}) {
+function firebaseUrlForPath(pathname) {
+  const safePath = String(pathname || '').split('/').filter(Boolean).map(encodeURIComponent).join('/');
+  return new URL(`${safePath}.json`, `${FIREBASE_DATABASE_URL}/`);
+}
+async function firebaseRequestAtPath(pathname, options = {}) {
   const hasServiceAccountEmail = Boolean(FIREBASE_CLIENT_EMAIL);
   const hasServiceAccountKey = Boolean(FIREBASE_PRIVATE_KEY);
   if (hasServiceAccountEmail !== hasServiceAccountKey) {
     throw new Error('Configure FIREBASE_CLIENT_EMAIL e FIREBASE_PRIVATE_KEY juntos no Render.');
   }
-  const url = firebaseUrl(child);
+  const url = firebaseUrlForPath(pathname);
+  for (const [key, value] of Object.entries(options.query || {})) url.searchParams.set(key, String(value));
   const headers = options.body === undefined ? {} : { 'Content-Type': 'application/json' };
   if (hasServiceAccountEmail && hasServiceAccountKey) {
     headers.Authorization = `Bearer ${await firebaseServiceAccountAccessToken()}`;
   } else if (FIREBASE_AUTH_TOKEN) {
-    // Compatibility fallback for Firebase ID tokens or legacy RTDB secrets.
     url.searchParams.set('auth', FIREBASE_AUTH_TOKEN);
   }
   let response;
@@ -448,6 +476,10 @@ async function firebaseRequest(child = '', options = {}) {
     throw new Error(`Firebase recusou a operação (${reason}).${hint}`);
   }
   return payload;
+}
+async function firebaseRequest(child = '', options = {}) {
+  const fullPath = `${FIREBASE_DATABASE_PATH}${child ? `/${child}` : ''}`;
+  return firebaseRequestAtPath(fullPath, options);
 }
 function actionErrorForUser(req, err) {
   const message = String(err?.message || 'Operação não concluída.');
@@ -524,7 +556,7 @@ function rechargeRowsFor(req) {
     rc.status, rc.provider_charge_id AS providerChargeId, rc.provider_reference AS providerReference,
     rc.external_reference AS externalReference, rc.payment_url AS paymentUrl, rc.provider_status AS providerStatus,
     rc.paid_at AS paidAt, rc.created_at AS createdAt, rc.updated_at AS updatedAt
-    FROM recharges rc JOIN resellers r ON r.id=rc.reseller_id ${owner ? '' : 'WHERE rc.reseller_id=?'} ORDER BY rc.id DESC LIMIT 100`;
+    FROM recharges rc JOIN resellers r ON r.id=rc.reseller_id ${owner ? '' : 'WHERE rc.reseller_id=? AND rc.reseller_hidden_at IS NULL'} ORDER BY rc.id DESC LIMIT 100`;
   return owner ? db.prepare(query).all() : db.prepare(query).all(req.reseller.id);
 }
 function rechargeByIdFor(req, id) {
@@ -536,6 +568,14 @@ function rechargeByIdFor(req, id) {
     FROM recharges rc JOIN resellers r ON r.id=rc.reseller_id WHERE rc.id=?`).get(id);
   if (!row || (req.session.user.role !== 'owner' && Number(row.resellerId) !== Number(req.reseller.id))) return null;
   return row;
+}
+function rechargeRanking() {
+  return db.prepare(`SELECT COALESCE(NULLIF(r.former_username,''),r.username) AS username,
+    COUNT(*) AS paidRecharges, COALESCE(SUM(rc.amount_cents),0) AS paidAmountCents,
+    COALESCE(SUM(rc.total_credits),0) AS creditsReceived
+    FROM recharges rc JOIN resellers r ON r.id=rc.reseller_id
+    WHERE rc.status='paid' GROUP BY r.id
+    ORDER BY paidAmountCents DESC, paidRecharges DESC, username COLLATE NOCASE ASC LIMIT 10`).all();
 }
 function applyRechargeEvent({ eventId, eventName, data }) {
   const externalReference = cleanText(data?.external_reference, 255);
@@ -562,7 +602,7 @@ function applyRechargeEvent({ eventId, eventName, data }) {
         if (!current) throw new Error('O revendedor da recarga não está ativo.');
         const nextBalance = roundCredits(Number(current.credits) + Number(recharge.total_credits));
         db.prepare('UPDATE resellers SET credits=? WHERE id=?').run(nextBalance, recharge.reseller_id);
-        db.prepare(`UPDATE recharges SET status='paid', provider_charge_id=?, provider_reference=?, provider_status='paid', paid_at=COALESCE(?, CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+        db.prepare(`UPDATE recharges SET status='paid', reseller_hidden_at=NULL, provider_charge_id=?, provider_reference=?, provider_status='paid', paid_at=COALESCE(?, CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
           .run(providerChargeId, providerReference, data?.paid_at || null, recharge.id);
         audit(actor, 'recharge_paid', { rechargeId: recharge.id, purchasedCredits: recharge.purchased_credits, bonusCredits: recharge.bonus_credits, totalCredits: recharge.total_credits, balance: nextBalance });
         return { handled: true, credited: true, status: 'paid', balance: nextBalance };
@@ -696,7 +736,24 @@ app.get('/api/dashboard', requireAuth, async (req, res, next) => {
         : { ...key, deviceConnected: false, remainingText: '—' });
     const plans = DURATION_PLANS.map(({ id, label, duration, unit, cost }) => ({ id, label, duration, unit, cost }));
     if (req.session.user.role === 'owner') {
-      res.json({ user: safeUser(req), rules, plans, firebaseAvailable, firebaseError, firebaseKeyCount, firebasePath: `/${FIREBASE_DATABASE_PATH}`,
+      let firebaseAudit = {};
+      let firebaseAuditAvailable = true;
+      try {
+        firebaseAudit = await firebaseRequestAtPath(FIREBASE_AUDIT_PATH, { query: { orderBy: '"$key"', limitToLast: 100 } }) || {};
+      } catch (err) {
+        firebaseAuditAvailable = false;
+        console.warn('Não foi possível ler a cópia de auditoria do Firebase:', err.message);
+      }
+      const localAudit = db.prepare('SELECT id, actor, action, details, created_at AS createdAt FROM audit ORDER BY id DESC LIMIT 100').all();
+      const cloudRows = Object.values(firebaseAudit).filter(item => item && typeof item === 'object').map((item, index) => ({
+        id: `fb-${item.eventId || index}`, actor: item.actor || 'Painel', action: item.action || 'evento',
+        details: JSON.stringify({ ...(item.details || {}), eventId: item.eventId }), createdAt: item.createdAt || ''
+      }));
+      const cloudEventIds = new Set(cloudRows.map(item => item.id.startsWith('fb-') ? item.id.slice(3) : ''));
+      const combinedAudit = [...cloudRows, ...localAudit.filter(item => {
+        try { return !cloudEventIds.has(JSON.parse(item.details).eventId); } catch { return true; }
+      })].sort((a,b) => new Date(String(b.createdAt).includes('T') ? b.createdAt : `${String(b.createdAt).replace(' ','T')}Z`) - new Date(String(a.createdAt).includes('T') ? a.createdAt : `${String(a.createdAt).replace(' ','T')}Z`)).slice(0,100);
+      res.json({ user: safeUser(req), rules, plans, firebaseAvailable, firebaseError, firebaseKeyCount, firebasePath: `/${FIREBASE_DATABASE_PATH}`, firebaseAuditAvailable,
         metrics: {
           resellers: db.prepare('SELECT COUNT(*) AS n FROM resellers WHERE active = 1 AND removed_at IS NULL').get().n,
           credits: db.prepare('SELECT COALESCE(SUM(credits),0) AS n FROM resellers WHERE active = 1 AND removed_at IS NULL').get().n,
@@ -707,8 +764,9 @@ app.get('/api/dashboard', requireAuth, async (req, res, next) => {
         },
         resellers: db.prepare('SELECT id, username, credits, prefix, active, created_at AS createdAt FROM resellers WHERE removed_at IS NULL ORDER BY id DESC').all(),
         recharges: rechargeRowsFor(req),
+        rechargeRanking: rechargeRanking(),
         keys,
-        audit: db.prepare('SELECT id, actor, action, details, created_at AS createdAt FROM audit ORDER BY id DESC LIMIT 100').all()
+        audit: combinedAudit
       });
     } else {
       res.json({ user: safeUser(req), rules, plans, recharges: rechargeRowsFor(req), keys });
@@ -847,6 +905,22 @@ app.post('/api/recharges', requireAuth, csrf, async (req, res) => {
     if (err.message.includes('SQLITE') || err.message.includes('UNIQUE')) return res.status(400).json({ error: 'Não foi possível registrar a recarga.' });
     res.status(Number(err.status) >= 400 && Number(err.status) < 500 ? 400 : 503).json({ error: err.message });
   }
+});
+app.post('/api/recharges/:id/dismiss', requireAuth, csrf, (req, res) => {
+  if (req.session.user.role !== 'reseller' || !req.reseller?.id) return res.status(403).json({ error: 'Apenas o revendedor pode remover uma pendência da própria lista.' });
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id < 1) throw new Error('Recarga inválida.');
+    const result = db.transaction(() => {
+      const recharge = db.prepare('SELECT id, status FROM recharges WHERE id=? AND reseller_id=?').get(id, req.reseller.id);
+      if (!recharge) throw new Error('Recarga não encontrada.');
+      if (recharge.status !== 'pending') throw new Error('Só é possível remover uma recarga ainda pendente.');
+      db.prepare("UPDATE recharges SET reseller_hidden_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=? AND reseller_id=? AND status='pending'").run(id, req.reseller.id);
+      audit(req.reseller.username, 'recharge_dismissed', { rechargeId: id, reason: 'reseller_does_not_intend_to_pay' });
+      return { ok: true };
+    })();
+    res.json(result);
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 app.get('/api/recharges/:id', requireAuth, async (req, res) => {
   try {
@@ -1017,5 +1091,17 @@ app.use((err, req, res, next) => {
 });
 const port = Number(process.env.PORT) || 3000;
 const host = process.env.HOST || '127.0.0.1';
-app.listen(port, host, () => console.log(`Painel disponível em http://${host}:${port}`));
+const server = app.listen(port, host, () => console.log(`Painel disponível em http://${host}:${port}`));
+let shuttingDown = false;
+async function gracefulShutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  server.close(async () => {
+    await Promise.allSettled([...pendingFirebaseAuditWrites]);
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 25000).unref();
+}
+process.once('SIGTERM', gracefulShutdown);
+process.once('SIGINT', gracefulShutdown);
 })().catch(err => { console.error('Falha ao iniciar o painel:', err); process.exit(1); });

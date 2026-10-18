@@ -36,12 +36,12 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
    ```
 
    Autorize o acesso a arquivos quando o Android solicitar.
-3. Baixe `keydesk-revendedores-render-v23.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
+3. Baixe `keydesk-revendedores-logs-ranking-v26.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
 
    ```bash
    mkdir -p ~/keydesk-v14
    if [ -d ~/keydesk/key-reseller-panel/data ]; then mkdir -p ~/keydesk-v14/data && cp -an ~/keydesk/key-reseller-panel/data/. ~/keydesk-v14/data/; fi
-   unzip -o ~/storage/downloads/keydesk-revendedores-render-v23.zip -d ~/keydesk-v14
+   unzip -o ~/storage/downloads/keydesk-revendedores-logs-ranking-v26.zip -d ~/keydesk-v14
    cd ~/keydesk-v14
    ```
 
@@ -168,9 +168,19 @@ mkdir -p ~/keydesk-v14
 cd ~/keydesk-v14
 bash SERVICO_24H.sh stop
 cp -a data ~/keydesk-data-backup-$(date +%Y%m%d-%H%M%S)
-   unzip -o ~/storage/downloads/keydesk-revendedores-render-v23.zip -d ~/keydesk-v14
+   unzip -o ~/storage/downloads/keydesk-revendedores-logs-ranking-v26.zip -d ~/keydesk-v14
 pkg install nodejs-lts unzip tmux termux-api -y
 bash SERVICO_24H.sh start
 ```
 
 Se o navegador usar arquivos antigos, atualize a página ou limpe o cache. A integração usa o mesmo PATCH em lote do app de referência no path `proxyAndroid/keys`; a interface exibe o path e a quantidade de registros lidos. O formato e a tabela de créditos já foram incorporados.
+
+
+## Atualização: auditoria, ranking e histórico de recargas
+
+- O servidor copia cada novo evento de auditoria para `proxyAndroid/keydeskAudit/events`, dentro do Realtime Database. A pasta `keydeskAudit` criada manualmente com `_setup: true` é preservada; os registros entram como filhos de `events`. A área **Atividade** do proprietário carrega os últimos eventos salvos no Firebase e combina-os com a auditoria local, eliminando duplicatas por identificador. Os detalhes enviados ao Firebase são filtrados para não copiar senhas, tokens, chaves completas nem identificadores de dispositivo. Nenhuma nova variável do Render é obrigatória: o caminho padrão já está no código. A conta de serviço existente deve continuar com acesso ao Realtime Database.
+- Na visão geral do proprietário, o ranking lista até 10 revendedores pelo total em reais de recargas com status **pago/confirmado**. Recargas pendentes, expiradas ou estornadas não entram no cálculo.
+- O botão **Não vou pagar** retira uma cobrança pendente apenas da lista do próprio revendedor. Não apaga o registro do banco/histórico do proprietário e não cancela a cobrança na API do BotaPix. Se o BotaPix confirmar o pagamento depois, o sistema credita os créditos e a recarga volta a aparecer.
+- No plano gratuito do Render, o SQLite continua sujeito à perda do disco temporário; contas e saldos não são restaurados pelos logs. A cópia de auditoria Firebase protege os eventos gravados, não substitui o backup/persistência do banco principal.
+
+Para atualizar, envie ao GitHub os arquivos da raiz deste ZIP e faça o deploy normal no serviço Render existente. Não altere `FIREBASE_DATABASE_PATH=proxyAndroid/keys`; o histórico de auditoria usa um caminho separado.
