@@ -21,6 +21,8 @@ services:
         value: https://gerador-goldxits-default-rtdb.firebaseio.com
       - key: FIREBASE_DATABASE_PATH
         value: proxyAndroid/keys
+      - key: FIREBASE_RESELLER_ACCOUNTS_PATH
+        value: proxyAndroid/keydeskResellers
       - key: FIREBASE_CLIENT_EMAIL
         sync: false
       - key: FIREBASE_PRIVATE_KEY

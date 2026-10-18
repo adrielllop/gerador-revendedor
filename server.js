@@ -16,6 +16,7 @@ const DB_FILE = path.join(DATA, 'app.sqlite');
 const SESSION_SECRET_FILE = path.join(DATA, 'session-secret');
 const FIREBASE_DATABASE_PATH = String(process.env.FIREBASE_DATABASE_PATH || 'proxyAndroid/keys').replace(/^\/+|\/+$/g, '');
 const FIREBASE_AUDIT_PATH = String(process.env.FIREBASE_AUDIT_PATH || 'proxyAndroid/keydeskAudit/events').replace(/^\/+|\/+$/g, '');
+const FIREBASE_RESELLER_ACCOUNTS_PATH = String(process.env.FIREBASE_RESELLER_ACCOUNTS_PATH || 'proxyAndroid/keydeskResellers').replace(/^\/+|\/+$/g, '');
 let FIREBASE_DATABASE_URL = String(process.env.FIREBASE_DATABASE_URL || 'https://gerador-goldxits-default-rtdb.firebaseio.com').trim().replace(/\/+$/, '').replace(/\.json$/i, '');
 // Tolerate an older .env that already included the Firebase path or .json suffix.
 const firebasePathSuffix = `/${FIREBASE_DATABASE_PATH}`;
@@ -477,6 +478,46 @@ async function firebaseRequestAtPath(pathname, options = {}) {
   }
   return payload;
 }
+const firebaseAccountMirrorEnabled = () => Boolean((FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) || FIREBASE_AUTH_TOKEN);
+function firebaseResellerAccountKey(username) { return String(username).toLowerCase().replace(/\./g, ','); }
+async function mirrorResellerAccount(id) {
+  if (!firebaseAccountMirrorEnabled()) return false;
+  const row = db.prepare('SELECT id, username, former_username AS formerUsername, password_hash AS passwordHash, password_tag AS passwordTag, credits, prefix, prefix_unlocked AS prefixUnlocked, active, removed_at AS removedAt, created_at AS createdAt FROM resellers WHERE id=?').get(id);
+  if (!row) return false;
+  const username = row.formerUsername || row.username;
+  const account = {
+    id: Number(row.id), username, passwordHash: row.passwordHash, passwordTag: row.passwordTag || null,
+    credits: Number(row.credits) || 0, prefix: row.prefix, prefixUnlocked: Boolean(row.prefixUnlocked),
+    active: Boolean(row.active) && !row.removedAt, removedAt: row.removedAt || null, createdAt: row.createdAt || null,
+    passwordFormat: 'bcrypt'
+  };
+  await firebaseRequestAtPath(`${FIREBASE_RESELLER_ACCOUNTS_PATH}/${firebaseResellerAccountKey(username)}`, { method: 'PUT', body: account });
+  return true;
+}
+async function restoreResellerAccount(username, password) {
+  if (!firebaseAccountMirrorEnabled()) return null;
+  const record = await firebaseRequestAtPath(`${FIREBASE_RESELLER_ACCOUNTS_PATH}/${firebaseResellerAccountKey(username)}`);
+  if (!record || typeof record !== 'object' || !record.active || String(record.username || '').toLowerCase() !== username.toLowerCase()) return null;
+  if (record.passwordFormat !== 'bcrypt' || typeof record.passwordHash !== 'string' || !await bcrypt.compare(password, record.passwordHash)) return null;
+  const old = db.prepare('SELECT id FROM resellers WHERE username=?').get(record.username);
+  if (old) {
+    db.prepare('UPDATE resellers SET password_hash=?, password_tag=?, credits=?, prefix=?, prefix_unlocked=?, active=1, former_username=NULL, removed_at=NULL WHERE id=?')
+      .run(record.passwordHash, record.passwordTag || null, roundCredits(Number(record.credits) || 0), validatePrefix(record.prefix || 'GoldCheats'), record.prefixUnlocked ? 1 : 0, old.id);
+    return db.prepare('SELECT id, username FROM resellers WHERE id=?').get(old.id);
+  }
+  const requestedId = Number(record.id);
+  const idAvailable = Number.isSafeInteger(requestedId) && requestedId > 0 && !db.prepare('SELECT id FROM resellers WHERE id=?').get(requestedId);
+  const prefix = validatePrefix(record.prefix || 'GoldCheats');
+  const credits = Math.max(0, roundCredits(Number(record.credits) || 0));
+  if (idAvailable) db.prepare('INSERT INTO resellers (id, username, password_hash, password_tag, credits, prefix, prefix_unlocked, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))')
+    .run(requestedId, record.username, record.passwordHash, record.passwordTag || null, credits, prefix, record.prefixUnlocked ? 1 : 0, record.createdAt || null);
+  else db.prepare('INSERT INTO resellers (username, password_hash, password_tag, credits, prefix, prefix_unlocked) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(record.username, record.passwordHash, record.passwordTag || null, credits, prefix, record.prefixUnlocked ? 1 : 0);
+  const restored = db.prepare('SELECT id, username FROM resellers WHERE username=?').get(record.username);
+  db.prepare("INSERT INTO audit (actor, action, details) VALUES (?, 'reseller_account_restored', ?)")
+    .run(record.username, JSON.stringify({ source: 'firebase_account_mirror' }));
+  return restored;
+}
 async function firebaseRequest(child = '', options = {}) {
   const fullPath = `${FIREBASE_DATABASE_PATH}${child ? `/${child}` : ''}`;
   return firebaseRequestAtPath(fullPath, options);
@@ -577,7 +618,7 @@ function rechargeRanking() {
     WHERE rc.status='paid' GROUP BY r.id
     ORDER BY paidAmountCents DESC, paidRecharges DESC, username COLLATE NOCASE ASC LIMIT 10`).all();
 }
-function applyRechargeEvent({ eventId, eventName, data }) {
+async function applyRechargeEvent({ eventId, eventName, data }) {
   const externalReference = cleanText(data?.external_reference, 255);
   if (!externalReference) return { handled: false };
   const recharge = db.prepare('SELECT * FROM recharges WHERE external_reference=?').get(externalReference);
@@ -616,16 +657,18 @@ function applyRechargeEvent({ eventId, eventName, data }) {
       .run(providerChargeId, providerReference, cleanText(data?.status || eventName, 40), recharge.id);
     return { handled: true, status: recharge.status };
   });
-  return tx();
+  const result = tx();
+  if (result.credited || result.duplicate) await mirrorResellerAccount(recharge.reseller_id);
+  return result;
 }
 async function reconcileRecharge(recharge) {
   if (!recharge?.providerReference && !recharge?.providerChargeId) return recharge;
   const providerId = recharge.providerReference || recharge.providerChargeId;
   const charge = await botapixRequest(`/charges/${encodeURIComponent(providerId)}`);
   if (charge.status === 'paid') {
-    applyRechargeEvent({ eventId: `reconcile-${charge.id || providerId}-paid`, eventName: 'payment.confirmed', data: charge });
+    await applyRechargeEvent({ eventId: `reconcile-${charge.id || providerId}-paid`, eventName: 'payment.confirmed', data: charge });
   } else if (charge.status === 'refunded') {
-    applyRechargeEvent({ eventId: `reconcile-${charge.id || providerId}-refunded`, eventName: 'payment.refunded', data: charge });
+    await applyRechargeEvent({ eventId: `reconcile-${charge.id || providerId}-refunded`, eventName: 'payment.refunded', data: charge });
   } else {
     const localStatus = charge.status === 'expired' ? 'expired' : (recharge.status === 'paid' ? 'paid' : recharge.status);
     db.prepare('UPDATE recharges SET provider_status=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(cleanText(charge.status, 40), localStatus, recharge.id);
@@ -661,6 +704,7 @@ app.post('/api/login', loginLimiter, csrf, async (req, res, next) => {
     if (!password || password.length > 128) return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
     const rawUsername = String(req.body.username ?? '').trim();
     let user = null;
+    let firebaseMirrorWarning = false;
     if (!rawUsername) {
       if (configuredOwnerPassword && constantTimeEqual(password, configuredOwnerPassword)) {
         user = { role: 'owner', username: '' };
@@ -672,13 +716,27 @@ app.post('/api/login', loginLimiter, csrf, async (req, res, next) => {
       let username;
       try { username = validateUsername(rawUsername); }
       catch { return res.status(401).json({ error: 'Usuário ou senha incorretos.' }); }
-      const reseller = db.prepare('SELECT id, username, password_hash AS passwordHash, password_tag AS passwordTag FROM resellers WHERE username=? AND active=1 AND removed_at IS NULL').get(username);
-      if (reseller?.passwordHash && await bcrypt.compare(password, reseller.passwordHash)) {
+      let reseller = db.prepare('SELECT id, username, password_hash AS passwordHash, password_tag AS passwordTag FROM resellers WHERE username=? AND active=1 AND removed_at IS NULL').get(username);
+      let passwordMatches = Boolean(reseller?.passwordHash && await bcrypt.compare(password, reseller.passwordHash));
+      if (!passwordMatches && firebaseAccountMirrorEnabled()) {
+        try {
+          reseller = await restoreResellerAccount(username, password);
+          passwordMatches = Boolean(reseller);
+        } catch (err) {
+          console.warn('Não foi possível recuperar a conta de revendedor do Firebase:', err.message);
+          if (!reseller) return res.status(503).json({ error: 'Não consegui consultar o acesso salvo. Verifique a conexão e a permissão privada do Firebase e tente novamente.' });
+        }
+      }
+      if (passwordMatches && reseller) {
         user = { role: 'reseller', id: reseller.id, username: reseller.username };
         if (!reseller.passwordTag) db.prepare('UPDATE resellers SET password_tag=? WHERE id=?').run(passwordTag(password), user.id);
       }
     }
     if (!user) return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
+    if (user.role === 'reseller') {
+      try { await mirrorResellerAccount(user.id); }
+      catch (err) { firebaseMirrorWarning = true; console.warn('Não foi possível sincronizar o hash privado do revendedor no Firebase:', err.message); }
+    }
     req.session.regenerate(err => {
       if (err) return next(err);
       req.session.user = user;
@@ -687,7 +745,7 @@ app.post('/api/login', loginLimiter, csrf, async (req, res, next) => {
         if (err2) return next(err2);
         audit(user.username || 'Dono', 'login', {});
         if (user.role === 'reseller') req.reseller = db.prepare('SELECT id, username, credits, prefix, prefix_unlocked AS prefixUnlocked, active FROM resellers WHERE id = ?').get(user.id);
-        res.json({ user: safeUser(req), csrfToken: req.session.csrfToken });
+        res.json({ user: safeUser(req), csrfToken: req.session.csrfToken, ...(firebaseMirrorWarning ? { warning: 'Acesso realizado, mas esta conta ainda não foi salva no Firebase. Confira a conexão e as permissões.' } : {}) });
       });
     });
   } catch (err) { next(err); }
@@ -700,6 +758,12 @@ app.post('/api/register', registerLimiter, csrf, async (req, res, next) => {
     await ensureUniqueAccessPassword(password);
     const result = db.prepare('INSERT INTO resellers (username, password_hash, password_tag, credits, prefix) VALUES (?, ?, ?, 0, ?)')
       .run(username, await bcrypt.hash(password, 12), passwordTag(password), 'GoldCheats');
+    try { await mirrorResellerAccount(Number(result.lastInsertRowid)); }
+    catch (err) {
+      db.prepare('DELETE FROM resellers WHERE id=?').run(Number(result.lastInsertRowid));
+      console.error('Não foi possível persistir o cadastro protegido no Firebase:', err.message);
+      return res.status(503).json({ error: 'O Firebase não confirmou o salvamento seguro da conta. Nenhuma senha em texto puro foi enviada; tente novamente depois de conferir a conexão.' });
+    }
     const user = { role: 'reseller', id: Number(result.lastInsertRowid), username };
     audit(username, 'reseller_registered', { username });
     req.session.regenerate(err => {
@@ -782,11 +846,16 @@ app.post('/api/resellers', requireAuth, requireOwner, csrf, async (req, res) => 
     const credits = Number(req.body.credits || 0);
     if (!halfCreditValue(credits) || credits < 0) throw new Error('Créditos iniciais devem ser múltiplos de 0,5 e não negativos.');
     const result = db.prepare('INSERT INTO resellers (username, password_hash, password_tag, credits, prefix) VALUES (?, ?, ?, ?, ?)').run(username, await bcrypt.hash(password, 12), passwordTag(password), credits, prefix);
+    try { await mirrorResellerAccount(Number(result.lastInsertRowid)); }
+    catch (err) {
+      db.prepare('DELETE FROM resellers WHERE id=?').run(Number(result.lastInsertRowid));
+      throw Object.assign(new Error('O Firebase não confirmou o salvamento seguro da conta. Verifique o acesso privado do banco e tente novamente.'), { status: 503 });
+    }
     audit(req.session.user.username || 'Dono', 'reseller_created', { reseller: username, credits, prefix });
     res.status(201).json({ id: Number(result.lastInsertRowid) });
-  } catch (err) { res.status(400).json({ error: err.message.includes('UNIQUE') ? 'Esse usuário já existe.' : err.message }); }
+  } catch (err) { res.status(err.status || 400).json({ error: err.message.includes('UNIQUE') ? 'Esse usuário já existe.' : err.message }); }
 });
-app.post('/api/reseller/prefix', requireAuth, csrf, (req, res) => {
+app.post('/api/reseller/prefix', requireAuth, csrf, async (req, res) => {
   if (req.session.user.role !== 'reseller') return res.status(403).json({ error: 'Operação não disponível para esta conta.' });
   try {
     const prefix = normalizePrefix(validatePrefix(req.body.prefix));
@@ -806,10 +875,12 @@ app.post('/api/reseller/prefix', requireAuth, csrf, (req, res) => {
       audit(reseller.username, 'reseller_prefix_changed', { previousPrefix: reseller.prefix, prefix, cost, firstPurchase: !alreadyUnlocked, balance });
       return { ok: true, changed: true, prefix, credits: balance, prefixUnlocked: true, unlockedNow: !alreadyUnlocked, cost };
     });
-    res.json(update());
+    const result = update();
+    if (result.changed) await mirrorResellerAccount(req.reseller.id);
+    res.json(result);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-app.patch('/api/resellers/:id/credits', requireAuth, requireOwner, csrf, (req, res) => {
+app.patch('/api/resellers/:id/credits', requireAuth, requireOwner, csrf, async (req, res) => {
   try {
     const id = Number(req.params.id), delta = Number(req.body.delta), reason = cleanText(req.body.reason || 'Ajuste manual', 120);
     if (!Number.isInteger(id) || !halfCreditValue(delta) || delta === 0) throw new Error('Informe um ajuste inteiro diferente de zero.');
@@ -822,7 +893,9 @@ app.patch('/api/resellers/:id/credits', requireAuth, requireOwner, csrf, (req, r
       audit(req.session.user.username || 'Dono', 'credits_adjusted', { reseller: r.username, delta, balance: next, reason });
       return next;
     });
-    res.json({ credits: tx() });
+    const credits = tx();
+    await mirrorResellerAccount(id);
+    res.json({ credits });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 app.patch('/api/resellers/:id', requireAuth, requireOwner, csrf, async (req, res) => {
@@ -836,6 +909,7 @@ app.patch('/api/resellers/:id', requireAuth, requireOwner, csrf, async (req, res
       await ensureUniqueAccessPassword(password, id);
       db.prepare('UPDATE resellers SET password_hash=?, password_tag=? WHERE id=?').run(await bcrypt.hash(password, 12), passwordTag(password), id);
     }
+    await mirrorResellerAccount(id);
     audit(req.session.user.username || 'Dono', 'reseller_updated', { reseller: r.username, prefix: req.body.prefix, passwordChanged: Boolean(req.body.password) });
     res.json({ ok: true });
   } catch (err) { res.status(400).json({ error: err.message }); }
@@ -856,10 +930,11 @@ app.delete('/api/resellers/:id', requireAuth, requireOwner, csrf, async (req, re
       audit(req.session.user.username || 'Dono', 'reseller_removed', { reseller: previousUsername, creditsArchived: reseller.credits, keysRetained: true });
     });
     tx();
+    await mirrorResellerAccount(id);
     res.json({ ok: true, username: previousUsername, keysRetained: true });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-app.post('/api/botapix/webhook', (req, res) => {
+app.post('/api/botapix/webhook', async (req, res) => {
   if (!BOTAPIX_WEBHOOK_SECRET) return res.status(503).json({ error: 'Webhook BotaPix ainda não configurado no servidor.' });
   const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
   const supplied = String(req.get('x-botapix-signature') || '');
@@ -871,7 +946,7 @@ app.post('/api/botapix/webhook', (req, res) => {
   const eventId = cleanText(event.event_id || req.get('x-botapix-event-id'), 255);
   if (!eventId) return res.status(400).json({ error: 'Webhook sem event_id.' });
   try {
-    applyRechargeEvent({ eventId, eventName: cleanText(event.event, 80), data: event.data || {} });
+    await applyRechargeEvent({ eventId, eventName: cleanText(event.event, 80), data: event.data || {} });
     res.json({ ok: true });
   } catch (err) {
     console.error('Falha ao processar webhook BotaPix:', err.message);
@@ -899,7 +974,7 @@ app.post('/api/recharges', requireAuth, csrf, async (req, res) => {
     db.prepare(`UPDATE recharges SET provider_charge_id=?, provider_reference=?, payment_url=?, provider_status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
       .run(Number(charge.id) || null, cleanText(charge.reference, 255) || null, String(charge.payment_url), cleanText(charge.status || 'pending', 40), rechargeId);
     audit(req.reseller.username, 'recharge_created', { rechargeId, amountCents: plan.amountCents, purchasedCredits: plan.purchasedCredits, bonusCredits: plan.bonusCredits, totalCredits: plan.totalCredits });
-    if (charge.status === 'paid') applyRechargeEvent({ eventId: `creation-${rechargeId}-paid`, eventName: 'payment.confirmed', data: { ...charge, external_reference: externalReference, amount: plan.amountCents, amount_paid: plan.amountCents } });
+    if (charge.status === 'paid') await applyRechargeEvent({ eventId: `creation-${rechargeId}-paid`, eventName: 'payment.confirmed', data: { ...charge, external_reference: externalReference, amount: plan.amountCents, amount_paid: plan.amountCents } });
     res.status(201).json({ id: rechargeId, amountCents: plan.amountCents, purchasedCredits: plan.purchasedCredits, bonusCredits: plan.bonusCredits, totalCredits: plan.totalCredits, paymentUrl: charge.payment_url, status: charge.status || 'pending' });
   } catch (err) {
     if (err.message.includes('SQLITE') || err.message.includes('UNIQUE')) return res.status(400).json({ error: 'Não foi possível registrar a recarga.' });
@@ -996,6 +1071,7 @@ app.post('/api/keys', requireAuth, csrf, async (req, res) => {
     const reservation = reserve();
     createdRows = reservation.rows;
     try {
+      await mirrorResellerAccount(resellerId);
       // Match the reference app exactly: PATCH a map of keys at /proxyAndroid/keys.json.
       const updates = Object.fromEntries(keyBatch.map(({ value, payload }) => [value, payload]));
       await firebaseRequest('', { method: 'PATCH', body: updates });
@@ -1016,6 +1092,7 @@ app.post('/api/keys', requireAuth, csrf, async (req, res) => {
             audit(req.reseller.username, 'key_generation_failed', { quantity, planId: plan.id, creditsRefunded: totalCost });
           });
           undo();
+          await mirrorResellerAccount(resellerId);
         } catch (rollbackError) { console.error('Falha ao estornar reserva de geração:', rollbackError); }
         try { await Promise.all(keyBatch.map(({ value }) => firebaseRequest(`${encodeURIComponent(value)}`, { method: 'DELETE' }))); } catch (cleanupError) { console.error('Falha ao limpar gravação parcial no Firebase:', cleanupError); }
         throw new Error(`${writeError.message} Nenhuma key foi entregue e os créditos foram estornados.`);
@@ -1083,6 +1160,7 @@ app.delete('/api/keys/:id', requireAuth, csrf, async (req, res) => {
 app.get(['/', '/index.html'], (req, res) => res.sendFile(path.join(ROOT, 'index.html')));
 app.get('/app.js', (req, res) => res.type('application/javascript').sendFile(path.join(ROOT, 'app.js')));
 app.get('/styles.css', (req, res) => res.type('text/css').sendFile(path.join(ROOT, 'styles.css')));
+app.get('/keydesk-logo.png', (req, res) => res.type('png').sendFile(path.join(ROOT, 'keydesk-logo.png')));
 app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
 app.use((err, req, res, next) => {
   console.error(err);

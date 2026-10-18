@@ -151,7 +151,7 @@ function authScreen() {
           }
         } catch {}
       }
-      state.user = result.user; state.csrf = result.csrfToken; await loadData(); await handleRechargeReturn();
+      state.user = result.user; state.csrf = result.csrfToken; await loadData(); if (result.warning) toast(result.warning, 'error'); await handleRechargeReturn();
     } catch(err) {
       toast(err.message, 'error'); button.disabled = false;
       button.innerHTML = registerMode ? 'Criar cadastro <span>→</span>' : 'Entrar <span>→</span>';

@@ -8,15 +8,19 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
 - No formulário de login, revendedores informam usuário e senha. O acesso principal usa o campo usuário vazio e a senha configurada em `OWNER_PASSWORD`; hashes e senha não são enviados ao navegador.
 - Em hospedagem de produção, configure `OWNER_PASSWORD` no painel da hospedagem; a configuração inicial do acesso principal não é aberta ao público. O acesso principal entra com o campo usuário vazio. O cadastro público da tela inicial cria exclusivamente um revendedor com saldo zero, nunca o acesso principal.
 - A tela de login oferece a opção de lembrar o acesso neste dispositivo: o usuário é lembrado localmente e, em navegadores compatíveis, a senha é entregue ao gerenciador de senhas nativo. O painel não grava a senha em texto simples no armazenamento do site. A aba de keys também tem um botão para recarregar a lista e consultar novamente os status atuais no Firebase.
-- Contas de revendedor com senha em hash, saldo de créditos e prefixo próprio (por padrão, GoldCheats). O dono pode remover o acesso: o login é bloqueado, a conta sai da lista, o saldo restante fica arquivado e as keys emitidas continuam no Firebase e no histórico. O nome de usuário fica livre para ser cadastrado novamente.
+- Contas de revendedor com senha em hash, saldo de créditos e prefixo próprio (por padrão, GoldCheats). Com as credenciais privadas do Firebase configuradas no servidor, o nome, o hash bcrypt, o saldo e o prefixo são espelhados na branch `proxyAndroid/keydeskResellers`, e o login restaura a conta se o SQLite local do Render tiver sido apagado. O dono pode remover o acesso: o login é bloqueado, a conta sai da lista, o saldo restante fica arquivado e as keys emitidas continuam no Firebase e no histórico. O nome de usuário fica livre para ser cadastrado novamente.
 - O revendedor libera seu prefixo personalizado por 5 créditos uma única vez; esse direito fica salvo permanentemente na conta e não há cobrança por key. Depois da liberação, cada modificação custa 2 créditos. O prefixo atual é usado nas próximas keys (as já geradas não mudam), e um prefixo já usado por outra conta não pode ser escolhido.
 - O proprietário pode adicionar/remover créditos, editar prefixos e gerir todas as keys. O revendedor pode pausar/retomar, resetar o vínculo ou excluir somente as próprias keys; nenhuma dessas ações altera créditos. Pausar bloqueia a key no app, mas a validade continua correndo. Resetar limpa somente os identificadores do dispositivo conectado: mantém a ativação e `expiresAt`, então o prazo continua correndo mesmo sem dispositivo e não reinicia quando outro aparelho se vincula. A interface de revendedor não exibe caminho, conexão ou contagem do Realtime Database, nem totais agregados de keys; continua mostrando as próprias keys necessárias para copiá-las e gerenciá-las.
 - Formato do app de referência: prefixo normalizado para maiúsculas e somente letras/números, hífen e 6 caracteres aleatórios de `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (sem caracteres ambíguos).
 - Preços aplicados: 1 hora = 1 crédito; 1 dia = 2,5 créditos; 3 dias = 3,5 créditos; 7 dias = 7 créditos; 15 dias = 10 créditos; 30 dias = 15 créditos. Cada duração selecionada é gravada no Firebase e o custo é debitado no saldo do revendedor.
 - Revendedores podem abrir a aba **Recargas**, escolher quantos créditos comprar e pagar via Pix pelo BotaPix. O preço é R$ 1,00 por crédito comprado; a cada 10 créditos pagos, 1 crédito extra é concedido como brinde (por exemplo, 20 pagos = 22 no saldo). O saldo só entra após confirmação do pagamento.
 - A geração usa PATCH em lote no endpoint `proxyAndroid/keys.json`. A key nova é gravada com `status: "pending"`, sem dispositivo, `activatedAt: 0` e `activationStarted: false`. No primeiro vínculo, o Worker/aplicativo marca a key como ativa e inicia o prazo completo como `agora + duração`; antes disso, a key permanece pendente e a contagem não começa.
-- Banco SQLite em WebAssembly salvo em `data/app.sqlite`, sem módulos nativos para compilar no Android; segredo de sessão aleatório em `data/session-secret`.
+- Banco SQLite em WebAssembly salvo em `data/app.sqlite`, sem módulos nativos para compilar no Android; segredo de sessão aleatório em `data/session-secret`. O espelho Firebase armazena apenas hash bcrypt de senha (nunca a senha original) e dados essenciais da conta; não é backup do histórico completo de recargas.
 - No Termux, a sessão de login fica na memória e será encerrada se o processo do painel parar; as contas e keys continuam salvas no arquivo SQLite.
+
+> **Proteção de credenciais:** mantenha a leitura e a escrita da branch `proxyAndroid/keydeskResellers` restritas ao servidor/conta de serviço. Não use regras de leitura pública nem exponha essa branch ao Android/Worker; ela contém hashes de senha, que não permitem recuperar a senha original, mas devem continuar privados. O hash não é mostrado no painel.
+
+- A imagem `keydesk-logo.png` é servida explicitamente pelo Express. As contas de revendedor são espelhadas em `proxyAndroid/keydeskResellers/{usuário}` com `passwordHash` em bcrypt, nunca a senha original. Contas antigas só entram no espelho depois de um login bem-sucedido enquanto ainda existem no SQLite; se o banco local já foi apagado antes desta versão, será necessário cadastrar o revendedor novamente.
 
 ## Requisitos
 
@@ -36,12 +40,12 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
    ```
 
    Autorize o acesso a arquivos quando o Android solicitar.
-3. Baixe `keydesk-revendedores-logo-temas-ranking-v28.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
+3. Baixe `keydesk-revendedores-logo-login-v29.zip` para Downloads e extraia. O ZIP já tem os arquivos na raiz, sem uma pasta `key-reseller-panel` envolvendo tudo:
 
    ```bash
    mkdir -p ~/keydesk-v14
    if [ -d ~/keydesk/key-reseller-panel/data ]; then mkdir -p ~/keydesk-v14/data && cp -an ~/keydesk/key-reseller-panel/data/. ~/keydesk-v14/data/; fi
-   unzip -o ~/storage/downloads/keydesk-revendedores-logo-temas-ranking-v28.zip -d ~/keydesk-v14
+   unzip -o ~/storage/downloads/keydesk-revendedores-logo-login-v29.zip -d ~/keydesk-v14
    cd ~/keydesk-v14
    ```
 
@@ -168,7 +172,7 @@ mkdir -p ~/keydesk-v14
 cd ~/keydesk-v14
 bash SERVICO_24H.sh stop
 cp -a data ~/keydesk-data-backup-$(date +%Y%m%d-%H%M%S)
-   unzip -o ~/storage/downloads/keydesk-revendedores-logo-temas-ranking-v28.zip -d ~/keydesk-v14
+   unzip -o ~/storage/downloads/keydesk-revendedores-logo-login-v29.zip -d ~/keydesk-v14
 pkg install nodejs-lts unzip tmux termux-api -y
 bash SERVICO_24H.sh start
 ```
