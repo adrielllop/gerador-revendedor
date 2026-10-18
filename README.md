@@ -9,7 +9,8 @@ Aplicação web local para o proprietário criar revendedores, administrar créd
 - Contas de revendedor com senha em hash, saldo de créditos e prefixo próprio (por padrão, GoldCheats). O dono pode remover o acesso: o login é bloqueado, a conta sai da lista, o saldo restante fica arquivado e as keys emitidas continuam no Firebase e no histórico. O nome de usuário fica livre para ser cadastrado novamente.
 - O proprietário pode adicionar/remover créditos, editar prefixos e gerir todas as keys. O revendedor pode pausar/retomar, resetar o vínculo ou excluir somente as próprias keys; nenhuma dessas ações altera créditos. Pausar bloqueia a key no app, mas a validade continua correndo. Resetar apenas desvincula o dispositivo e a expiração também continua correndo. Pausa/reset ficam visíveis na tabela e habilitam quando houver vínculo, conforme o gerador de referência.
 - Formato do app de referência: prefixo normalizado para maiúsculas e somente letras/números, hífen e 6 caracteres aleatórios de `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (sem caracteres ambíguos).
-- Preços aplicados: 1 hora = 0,5 crédito; 1 dia = 1; 3 dias = 2; 7 dias = 6; 30 dias = 8. Cada duração selecionada é gravada no Firebase e o custo é debitado no saldo do revendedor.
+- Preços aplicados: 1 hora = 1 crédito; 1 dia = 2,5 créditos; 3 dias = 3,5 créditos; 7 dias = 7 créditos; 15 dias = 10 créditos; 30 dias = 15 créditos. Cada duração selecionada é gravada no Firebase e o custo é debitado no saldo do revendedor.
+- Revendedores podem abrir a aba **Recargas**, escolher quantos créditos comprar e pagar via Pix pelo BotaPix. O preço é R$ 1,00 por crédito comprado; a cada 10 créditos pagos, 1 crédito extra é concedido como brinde (por exemplo, 20 pagos = 22 no saldo). O saldo só entra após confirmação do pagamento.
 - A geração usa PATCH em lote no endpoint `proxyAndroid/keys.json`. A key nasce `status: "active"`, sem dispositivo, `activatedAt: 0` e `activationStarted: false`. `expiresAt` é criado como `createdAt + duração` (por exemplo, 1 hora = 1 hora após a geração), sem datas artificiais. O painel mostra **Aguardando** enquanto `activationStarted` for falso; no primeiro vínculo, o aplicativo deve reiniciar o prazo completo como `agora + duração` e marcar a ativação.
 - Banco SQLite em WebAssembly salvo em `data/app.sqlite`, sem módulos nativos para compilar no Android; segredo de sessão aleatório em `data/session-secret`.
 - No Termux, a sessão de login fica na memória e será encerrada se o processo do painel parar; as contas e keys continuam salvas no arquivo SQLite.
@@ -91,15 +92,51 @@ A senha do proprietário não está embutida no código, JavaScript, HTML ou ZIP
 
 O GitHub pode guardar o código-fonte, mas **não executa este painel Node.js**. O GitHub Pages serve páginas estáticas e não hospeda o servidor Express, o banco SQLite nem o túnel. Para deixar o painel acessível sem Termux, publique o repositório e conecte-o a um serviço de hospedagem que execute Node.js (comando de instalação `npm install`, comando de início `npm start`).
 
-O pacote plano mantém os arquivos do projeto na raiz, sem subpastas de código. Ao iniciar, o servidor cria `data/` automaticamente para armazenar o banco e a autenticação local.
+O pacote é plano: painel e Worker ficam na raiz, sem subpastas de código. `worker-index.mjs`, `worker-license.test.mjs` e `wrangler.toml` correspondem ao Worker Android/Firebase; `server.js`, `app.js` e `render.yaml` correspondem ao painel Render. Ao iniciar, o painel cria `data/` automaticamente para armazenar o banco e a autenticação local.
 
 Ao configurar uma hospedagem HTTPS, configure `HOST=0.0.0.0`, deixe a plataforma fornecer `PORT` e use `COOKIE_SECURE=true`. Como o painel salva contas e créditos em `data/app.sqlite`, o serviço precisa oferecer armazenamento persistente montado para a pasta `data/`; em sistemas de arquivos temporários, esses dados podem ser perdidos em reinícios ou novas implantações. Configure secrets/variáveis privadas no painel da hospedagem, nunca no repositório. Não envie `.env` nem conteúdo de `data/`; o `.gitignore` do projeto os exclui.
 
+Para habilitar recargas, configure `BOTAPIX_API_KEY` com a API key privada fornecida pelo BotaPix, `BOTAPIX_WEBHOOK_SECRET` com o segredo de webhook da conta e `PUBLIC_URL` com a URL HTTPS pública do painel. No Dashboard do BotaPix, cadastre `https://SEU-DOMINIO/api/botapix/webhook` como endpoint de webhook. As chaves nunca são enviadas ao navegador nem incluídas neste ZIP. O endpoint valida `X-BotaPix-Signature`, descarta eventos repetidos e libera o crédito apenas em `payment.confirmed`; enquanto o webhook não estiver configurado, a tela ainda tenta conciliar cobranças pendentes pela API.
+
+### Lista completa das variáveis do painel (Render)
+
+O `render.yaml` já declara as opções abaixo. No Render, abra o serviço → **Environment**. Os valores sensíveis marcados como Secret devem ser preenchidos somente nesse painel, nunca no GitHub ou em um `.env` enviado.
+
+| Variável | O que colocar | Observação |
+|---|---|---|
+| `NODE_ENV` | `production` | Já definido pelo Blueprint. |
+| `HOST` | `0.0.0.0` | Já definido pelo Blueprint para o Render. |
+| `PORT` | Não preencher | O Render injeta a porta automaticamente. |
+| `COOKIE_SECURE` | `true` | Já definido; necessário para cookies HTTPS. |
+| `SESSION_SECRET` | Valor aleatório forte | O Render gera automaticamente pelo Blueprint; não precisa inventar um. |
+| `OWNER_PASSWORD` | Sua senha de acesso | O Blueprint pede que você preencha em privado. Não compartilhe. |
+| `FIREBASE_DATABASE_URL` | `https://gerador-goldxits-default-rtdb.firebaseio.com` | URL-base pública do Realtime Database. |
+| `FIREBASE_DATABASE_PATH` | `proxyAndroid/keys` | Caminho das keys. |
+| `FIREBASE_AUTH_TOKEN` | Deixar vazio se não for exigido pelas regras | Só use uma credencial Firebase compatível se as regras do banco exigirem autenticação; não coloque aqui a chave privada da conta de serviço Cloudflare. |
+| `BOTAPIX_API_BASE` | `https://botapix.com/api/v1` | Já definido; mantenha o padrão salvo indicação diferente do provedor. |
+| `BOTAPIX_API_KEY` | API key privada BotaPix | Secret privado. Se já foi compartilhado fora do painel seguro, gere outra. |
+| `BOTAPIX_WEBHOOK_SECRET` | Segredo de assinatura do webhook BotaPix | Secret privado; configure o mesmo valor no provedor. |
+| `PUBLIC_URL` | URL HTTPS pública deste serviço, sem barra final | Para o serviço atual use `https://gerador-revendedor.onrender.com`; o webhook fica em `/api/botapix/webhook`. |
+
+### Variáveis do Cloudflare Worker (arquivos na raiz)
+
+O `wrangler.toml` na raiz declara `FIREBASE_DATABASE_URL` e `FIREBASE_DATABASE_PATH`. Para os valores secretos, configure Cloudflare Worker → **Settings → Variables and Secrets** como **Secret**:
+
+| Nome | O que colocar |
+|---|---|
+| `FIREBASE_CLIENT_EMAIL` | `client_email` da conta de serviço dedicada do Firebase. |
+| `FIREBASE_PRIVATE_KEY` | `private_key` completo da mesma conta de serviço. |
+| `LICENSE_RATE_LIMITER` | Binding técnico de limite de tentativas; já configurado no Worker, não é campo de texto. |
+
+Nunca publique JSON da conta de serviço, `private_key` ou valores preenchidos em `.dev.vars`. O modelo `.dev.vars.example` tem apenas campos vazios para uso local e `.dev.vars` está ignorado pelo Git.
+
+Para testar e publicar o Worker a partir desta mesma raiz, execute `npm ci`, `npm run check:worker`, `npm run test:worker`, `npx wrangler login`, cadastre os secrets com `npx wrangler secret put FIREBASE_CLIENT_EMAIL` e `npx wrangler secret put FIREBASE_PRIVATE_KEY`, e publique com `npm run deploy:worker`. A publicação atualiza o Worker chamado `draco-license-bridge` na conta Cloudflare conectada.
+
 ### Render (plano gratuito, para teste)
 
-O arquivo `render.yaml` configura um serviço Node.js gratuito e solicita `OWNER_PASSWORD` como segredo privado durante a configuração do Blueprint. Informe a senha-mestra que você já escolheu; isso não cria outra senha nem a publica no repositório. Depois do deploy, acesse o endereço `*.onrender.com`. O administrador entra na tela normal deixando Usuário em branco e usando a senha-mestra.
+O arquivo `render.yaml` configura um serviço Node.js gratuito e solicita `OWNER_PASSWORD` como variável privada durante a configuração do Blueprint. Informe a senha que você já configurou. Depois do deploy, acesse o endereço `*.onrender.com`. A tela pública de acesso mostra apenas os campos Usuário e Senha; para a conta vinculada a `OWNER_PASSWORD`, deixe Usuário vazio e informe somente a senha configurada.
 
-Para atualizar um serviço Render que já existe, substitua os arquivos do repositório GitHub pelos do ZIP (mantenha todos no diretório raiz), faça commit e use **Manual Deploy → Deploy latest commit** se não iniciar automaticamente. Não crie outro serviço para esta atualização. No Environment ou no grupo vinculado ao serviço, configure `OWNER_PASSWORD` com a senha-mestra já escolhida; o servidor grava somente o hash no arquivo separado. Não coloque a senha no GitHub. Se já houver um hash de dono, a variável deve conter a mesma senha atual para não substituí-la por outra. Hashes antigos de revendedores são reconhecidos: o dono entra com usuário vazio e cada revendedor informa seu usuário e senha.
+Para atualizar um serviço Render que já existe, substitua os arquivos do repositório GitHub pelos do ZIP (mantenha todos no diretório raiz), faça commit e use **Manual Deploy → Deploy latest commit** se não iniciar automaticamente. Não crie outro serviço para esta atualização. Em **Environment**, mantenha `OWNER_PASSWORD` com a senha já configurada e acrescente os segredos de pagamento se ainda não estiverem definidos. Não coloque senhas nem chaves privadas no GitHub. Para entrar na conta vinculada à senha `OWNER_PASSWORD`, deixe Usuário vazio e informe somente a senha; os demais acessos usam usuário e senha.
 
 **Limitações importantes:** o serviço gratuito pode dormir após 15 minutos sem acessos e demorar cerca de um minuto para voltar. Ele não oferece disco persistente: `data/app.sqlite` pode ser perdido, incluindo contas e créditos. Se `data/owner-auth.json` for apagado, `OWNER_PASSWORD` privada recria o hash do dono no próximo início; contas e créditos não são restaurados por essa variável. As keys já enviadas ao Firebase ficam no Firebase. Use o plano grátis apenas para testes com dados fictícios.
 

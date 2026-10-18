@@ -22,13 +22,18 @@ if (FIREBASE_DATABASE_URL.toLowerCase().endsWith(firebasePathSuffix.toLowerCase(
   FIREBASE_DATABASE_URL = FIREBASE_DATABASE_URL.slice(0, -firebasePathSuffix.length).replace(/\/+$/, '');
 }
 const FIREBASE_AUTH_TOKEN = String(process.env.FIREBASE_AUTH_TOKEN || '').trim();
+const BOTAPIX_API_KEY = String(process.env.BOTAPIX_API_KEY || '').trim();
+const BOTAPIX_WEBHOOK_SECRET = String(process.env.BOTAPIX_WEBHOOK_SECRET || '').trim();
+const BOTAPIX_API_BASE = String(process.env.BOTAPIX_API_BASE || 'https://botapix.com/api/v1').trim().replace(/\/+$/, '');
+const PUBLIC_URL = String(process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '');
 const KEY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const DURATION_PLANS = [
-  { id: '1h', label: '1 hora', duration: 1, unit: 'hours', durationMs: 3600000, cost: 0.5 },
-  { id: '1d', label: '1 dia', duration: 1, unit: 'days', durationMs: 86400000, cost: 1 },
-  { id: '3d', label: '3 dias', duration: 3, unit: 'days', durationMs: 259200000, cost: 2 },
-  { id: '7d', label: '7 dias', duration: 7, unit: 'days', durationMs: 604800000, cost: 6 },
-  { id: '30d', label: '30 dias', duration: 30, unit: 'days', durationMs: 2592000000, cost: 8 }
+  { id: '1h', label: '1 hora', duration: 1, unit: 'hours', durationMs: 3600000, cost: 1 },
+  { id: '1d', label: '1 dia', duration: 1, unit: 'days', durationMs: 86400000, cost: 2.5 },
+  { id: '3d', label: '3 dias', duration: 3, unit: 'days', durationMs: 259200000, cost: 3.5 },
+  { id: '7d', label: '7 dias', duration: 7, unit: 'days', durationMs: 604800000, cost: 7 },
+  { id: '15d', label: '15 dias', duration: 15, unit: 'days', durationMs: 1296000000, cost: 10 },
+  { id: '30d', label: '30 dias', duration: 30, unit: 'days', durationMs: 2592000000, cost: 15 }
 ];
 fs.mkdirSync(DATA, { recursive: true, mode: 0o700 });
 function sessionSecret() {
@@ -145,6 +150,31 @@ db.exec(`
     details TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS recharges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reseller_id INTEGER NOT NULL REFERENCES resellers(id),
+    amount_cents INTEGER NOT NULL CHECK(amount_cents >= 100),
+    purchased_credits INTEGER NOT NULL CHECK(purchased_credits >= 1),
+    bonus_credits INTEGER NOT NULL DEFAULT 0 CHECK(bonus_credits >= 0),
+    total_credits INTEGER NOT NULL CHECK(total_credits >= 1),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','paid','expired','refunded','failed')),
+    provider_charge_id INTEGER,
+    provider_reference TEXT,
+    external_reference TEXT NOT NULL UNIQUE,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    payment_url TEXT,
+    provider_status TEXT,
+    paid_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS payment_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    event_id TEXT NOT NULL UNIQUE,
+    event_name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 const resellerColumns = new Set(db.prepare('PRAGMA table_info(resellers)').all().map(column => column.name));
 if (!resellerColumns.has('former_username')) db.exec('ALTER TABLE resellers ADD COLUMN former_username TEXT');
@@ -184,6 +214,7 @@ const app = express();
 app.disable('x-powered-by');
 if (process.env.COOKIE_SECURE === 'true') app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], styleSrc: ["'self'"], scriptSrc: ["'self'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"], objectSrc: ["'none'"], baseUri: ["'self'"] } } }));
+app.use('/api/botapix/webhook', express.raw({ type: 'application/json', limit: '64kb' }));
 app.use(express.json({ limit: '32kb' }));
 app.use(session({
   store: new session.MemoryStore(),
@@ -354,6 +385,117 @@ function readFirebaseStatus(localKey, remote) {
   }
   return { ...localKey, status, deviceConnected: Boolean(deviceId), remainingText, firebaseExpiresAt: expiresAt || null };
 }
+function publicUrlFor(req, pathname) {
+  const protocol = String(req.get('x-forwarded-proto') || (req.secure ? 'https' : 'http')).split(',')[0].trim();
+  const host = req.get('host');
+  const base = PUBLIC_URL || `${protocol}://${host}`;
+  return new URL(pathname, `${base}/`).toString();
+}
+async function botapixRequest(endpoint, options = {}) {
+  if (!BOTAPIX_API_KEY) throw new Error('Recargas indisponíveis: configure BOTAPIX_API_KEY no servidor.');
+  const url = new URL(String(endpoint).replace(/^\/+/, ''), `${BOTAPIX_API_BASE}/`);
+  const headers = { Accept: 'application/json', Authorization: `Bearer ${BOTAPIX_API_KEY}`, ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) };
+  let response;
+  try {
+    response = await fetch(url, { method: options.method || 'GET', headers, body: options.body === undefined ? undefined : JSON.stringify(options.body), signal: AbortSignal.timeout(10000) });
+  } catch (err) {
+    throw new Error(`Não foi possível conectar ao BotaPix: ${err.message}`);
+  }
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const reason = typeof payload?.message === 'string' ? payload.message : (typeof payload?.error === 'string' ? payload.error : `HTTP ${response.status}`);
+    const error = new Error(`BotaPix recusou a operação (${reason}).`);
+    error.status = response.status;
+    throw error;
+  }
+  return payload?.data ?? payload;
+}
+function parseRechargeCredits(value) {
+  const credits = Number(String(value ?? '').replace(',', '.'));
+  if (!Number.isSafeInteger(credits) || credits < 1 || credits > 10000) throw new Error('Escolha de 1 a 10.000 créditos para a recarga.');
+  const bonusCredits = Math.floor(credits / 10);
+  return { purchasedCredits: credits, bonusCredits, totalCredits: credits + bonusCredits, amountCents: credits * 100 };
+}
+function rechargeRowsFor(req) {
+  const owner = req.session.user.role === 'owner';
+  const query = `SELECT rc.id, rc.reseller_id AS resellerId, r.username AS reseller, rc.amount_cents AS amountCents,
+    rc.purchased_credits AS purchasedCredits, rc.bonus_credits AS bonusCredits, rc.total_credits AS totalCredits,
+    rc.status, rc.provider_charge_id AS providerChargeId, rc.provider_reference AS providerReference,
+    rc.external_reference AS externalReference, rc.payment_url AS paymentUrl, rc.provider_status AS providerStatus,
+    rc.paid_at AS paidAt, rc.created_at AS createdAt, rc.updated_at AS updatedAt
+    FROM recharges rc JOIN resellers r ON r.id=rc.reseller_id ${owner ? '' : 'WHERE rc.reseller_id=?'} ORDER BY rc.id DESC LIMIT 100`;
+  return owner ? db.prepare(query).all() : db.prepare(query).all(req.reseller.id);
+}
+function rechargeByIdFor(req, id) {
+  const row = db.prepare(`SELECT rc.id, rc.reseller_id AS resellerId, r.username AS reseller, rc.amount_cents AS amountCents,
+    rc.purchased_credits AS purchasedCredits, rc.bonus_credits AS bonusCredits, rc.total_credits AS totalCredits,
+    rc.status, rc.provider_charge_id AS providerChargeId, rc.provider_reference AS providerReference,
+    rc.external_reference AS externalReference, rc.payment_url AS paymentUrl, rc.provider_status AS providerStatus,
+    rc.paid_at AS paidAt, rc.created_at AS createdAt, rc.updated_at AS updatedAt
+    FROM recharges rc JOIN resellers r ON r.id=rc.reseller_id WHERE rc.id=?`).get(id);
+  if (!row || (req.session.user.role !== 'owner' && Number(row.resellerId) !== Number(req.reseller.id))) return null;
+  return row;
+}
+function applyRechargeEvent({ eventId, eventName, data }) {
+  const externalReference = cleanText(data?.external_reference, 255);
+  if (!externalReference) return { handled: false };
+  const recharge = db.prepare('SELECT * FROM recharges WHERE external_reference=?').get(externalReference);
+  if (!recharge) return { handled: false };
+  const reseller = db.prepare('SELECT username FROM resellers WHERE id=?').get(recharge.reseller_id);
+  const actor = reseller?.username || `Revendedor #${recharge.reseller_id}`;
+  const stableEventId = cleanText(eventId || `reconcile-${recharge.id}-${eventName}`, 255);
+  const tx = db.transaction(() => {
+    if (db.prepare('SELECT id FROM payment_events WHERE event_id=?').get(stableEventId)) return { handled: true, duplicate: true, status: recharge.status };
+    db.prepare('INSERT INTO payment_events (provider, event_id, event_name) VALUES (?, ?, ?)').run('botapix', stableEventId, eventName);
+    const amount = Number(data?.amount ?? recharge.amount_cents);
+    const amountPaid = Number(data?.amount_paid ?? amount);
+    const providerChargeId = Number(data?.id) || recharge.provider_charge_id || null;
+    const providerReference = cleanText(data?.reference || recharge.provider_reference, 255) || null;
+    if (eventName === 'payment.confirmed') {
+      if (amount !== Number(recharge.amount_cents) || amountPaid < Number(recharge.amount_cents)) {
+        audit('BotaPix', 'recharge_amount_mismatch', { rechargeId: recharge.id, expectedCents: recharge.amount_cents, amount, amountPaid });
+        return { handled: true, mismatch: true, status: recharge.status };
+      }
+      if (recharge.status !== 'paid') {
+        const current = db.prepare('SELECT credits FROM resellers WHERE id=? AND active=1 AND removed_at IS NULL').get(recharge.reseller_id);
+        if (!current) throw new Error('O revendedor da recarga não está ativo.');
+        const nextBalance = roundCredits(Number(current.credits) + Number(recharge.total_credits));
+        db.prepare('UPDATE resellers SET credits=? WHERE id=?').run(nextBalance, recharge.reseller_id);
+        db.prepare(`UPDATE recharges SET status='paid', provider_charge_id=?, provider_reference=?, provider_status='paid', paid_at=COALESCE(?, CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+          .run(providerChargeId, providerReference, data?.paid_at || null, recharge.id);
+        audit(actor, 'recharge_paid', { rechargeId: recharge.id, purchasedCredits: recharge.purchased_credits, bonusCredits: recharge.bonus_credits, totalCredits: recharge.total_credits, balance: nextBalance });
+        return { handled: true, credited: true, status: 'paid', balance: nextBalance };
+      }
+    } else if (eventName === 'payment.refunded') {
+      db.prepare(`UPDATE recharges SET status='refunded', provider_charge_id=?, provider_reference=?, provider_status='refunded', updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(providerChargeId, providerReference, recharge.id);
+      audit(actor, 'recharge_refunded', { rechargeId: recharge.id, totalCredits: recharge.total_credits });
+      return { handled: true, status: 'refunded' };
+    }
+    db.prepare('UPDATE recharges SET provider_charge_id=COALESCE(?, provider_charge_id), provider_reference=COALESCE(?, provider_reference), provider_status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+      .run(providerChargeId, providerReference, cleanText(data?.status || eventName, 40), recharge.id);
+    return { handled: true, status: recharge.status };
+  });
+  return tx();
+}
+async function reconcileRecharge(recharge) {
+  if (!recharge?.providerReference && !recharge?.providerChargeId) return recharge;
+  const providerId = recharge.providerReference || recharge.providerChargeId;
+  const charge = await botapixRequest(`/charges/${encodeURIComponent(providerId)}`);
+  if (charge.status === 'paid') {
+    applyRechargeEvent({ eventId: `reconcile-${charge.id || providerId}-paid`, eventName: 'payment.confirmed', data: charge });
+  } else if (charge.status === 'refunded') {
+    applyRechargeEvent({ eventId: `reconcile-${charge.id || providerId}-refunded`, eventName: 'payment.refunded', data: charge });
+  } else {
+    const localStatus = charge.status === 'expired' ? 'expired' : (recharge.status === 'paid' ? 'paid' : recharge.status);
+    db.prepare('UPDATE recharges SET provider_status=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(cleanText(charge.status, 40), localStatus, recharge.id);
+  }
+  return db.prepare(`SELECT rc.id, rc.reseller_id AS resellerId, r.username AS reseller, rc.amount_cents AS amountCents,
+    rc.purchased_credits AS purchasedCredits, rc.bonus_credits AS bonusCredits, rc.total_credits AS totalCredits,
+    rc.status, rc.provider_charge_id AS providerChargeId, rc.provider_reference AS providerReference,
+    rc.external_reference AS externalReference, rc.payment_url AS paymentUrl, rc.provider_status AS providerStatus,
+    rc.paid_at AS paidAt, rc.created_at AS createdAt, rc.updated_at AS updatedAt
+    FROM recharges rc JOIN resellers r ON r.id=rc.reseller_id WHERE rc.id=?`).get(recharge.id);
+}
 
 app.get('/api/bootstrap', (req, res) => res.json({ setupRequired: !ownerFileExists(), csrfToken: req.session.csrfToken }));
 app.post('/api/setup', csrf, async (req, res, next) => {
@@ -434,11 +576,12 @@ app.get('/api/dashboard', requireAuth, async (req, res, next) => {
           connectedDevices: keys.filter(key => key.deviceConnected).length
         },
         resellers: db.prepare('SELECT id, username, credits, prefix, active, created_at AS createdAt FROM resellers WHERE removed_at IS NULL ORDER BY id DESC').all(),
+        recharges: rechargeRowsFor(req),
         keys,
         audit: db.prepare('SELECT id, actor, action, details, created_at AS createdAt FROM audit ORDER BY id DESC LIMIT 100').all()
       });
     } else {
-      res.json({ user: safeUser(req), rules, plans, firebaseAvailable, firebaseError, firebaseKeyCount, firebasePath: `/${FIREBASE_DATABASE_PATH}`, keys });
+      res.json({ user: safeUser(req), rules, plans, firebaseAvailable, firebaseError, firebaseKeyCount, firebasePath: `/${FIREBASE_DATABASE_PATH}`, recharges: rechargeRowsFor(req), keys });
     }
   } catch (err) { next(err); }
 });
@@ -504,6 +647,65 @@ app.delete('/api/resellers/:id', requireAuth, requireOwner, csrf, async (req, re
     tx();
     res.json({ ok: true, username: previousUsername, keysRetained: true });
   } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.post('/api/botapix/webhook', (req, res) => {
+  if (!BOTAPIX_WEBHOOK_SECRET) return res.status(503).json({ error: 'Webhook BotaPix ainda não configurado no servidor.' });
+  const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
+  const supplied = String(req.get('x-botapix-signature') || '');
+  const expected = `sha256=${crypto.createHmac('sha256', BOTAPIX_WEBHOOK_SECRET).update(rawBody).digest('hex')}`;
+  const a = Buffer.from(supplied); const b = Buffer.from(expected);
+  if (!a.length || a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Assinatura do webhook inválida.' });
+  let event;
+  try { event = JSON.parse(rawBody.toString('utf8')); } catch { return res.status(400).json({ error: 'JSON do webhook inválido.' }); }
+  const eventId = cleanText(event.event_id || req.get('x-botapix-event-id'), 255);
+  if (!eventId) return res.status(400).json({ error: 'Webhook sem event_id.' });
+  try {
+    applyRechargeEvent({ eventId, eventName: cleanText(event.event, 80), data: event.data || {} });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Falha ao processar webhook BotaPix:', err.message);
+    res.status(500).json({ error: 'Não foi possível processar o webhook.' });
+  }
+});
+app.post('/api/recharges', requireAuth, csrf, async (req, res) => {
+  if (req.session.user.role !== 'reseller' || !req.reseller?.id) return res.status(403).json({ error: 'A recarga deve ser feita pelo acesso do revendedor.' });
+  try {
+    const plan = parseRechargeCredits(req.body.credits);
+    const externalReference = `keydesk-recharge-${crypto.randomUUID()}`;
+    const idempotencyKey = externalReference;
+    const created = db.prepare(`INSERT INTO recharges (reseller_id, amount_cents, purchased_credits, bonus_credits, total_credits, external_reference, idempotency_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(req.reseller.id, plan.amountCents, plan.purchasedCredits, plan.bonusCredits, plan.totalCredits, externalReference, idempotencyKey);
+    const rechargeId = Number(created.lastInsertRowid);
+    const charge = await botapixRequest('/charges', { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: {
+      amount: plan.amountCents,
+      external_reference: externalReference,
+      description: `Recarga Keydesk - ${plan.purchasedCredits} credito(s)`,
+      expiration: 3600,
+      redirect_url: publicUrlFor(req, `/?recharge=${rechargeId}`),
+      metadata: { recharge_id: String(rechargeId), reseller_id: String(req.reseller.id), purchased_credits: String(plan.purchasedCredits), total_credits: String(plan.totalCredits) }
+    }});
+    if (!charge?.payment_url) throw new Error('BotaPix não retornou a URL de pagamento.');
+    db.prepare(`UPDATE recharges SET provider_charge_id=?, provider_reference=?, payment_url=?, provider_status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(Number(charge.id) || null, cleanText(charge.reference, 255) || null, String(charge.payment_url), cleanText(charge.status || 'pending', 40), rechargeId);
+    audit(req.reseller.username, 'recharge_created', { rechargeId, amountCents: plan.amountCents, purchasedCredits: plan.purchasedCredits, bonusCredits: plan.bonusCredits, totalCredits: plan.totalCredits });
+    if (charge.status === 'paid') applyRechargeEvent({ eventId: `creation-${rechargeId}-paid`, eventName: 'payment.confirmed', data: { ...charge, external_reference: externalReference, amount: plan.amountCents, amount_paid: plan.amountCents } });
+    res.status(201).json({ id: rechargeId, amountCents: plan.amountCents, purchasedCredits: plan.purchasedCredits, bonusCredits: plan.bonusCredits, totalCredits: plan.totalCredits, paymentUrl: charge.payment_url, status: charge.status || 'pending' });
+  } catch (err) {
+    if (err.message.includes('SQLITE') || err.message.includes('UNIQUE')) return res.status(400).json({ error: 'Não foi possível registrar a recarga.' });
+    res.status(Number(err.status) >= 400 && Number(err.status) < 500 ? 400 : 503).json({ error: err.message });
+  }
+});
+app.get('/api/recharges/:id', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: 'Recarga inválida.' });
+    let recharge = rechargeByIdFor(req, id);
+    if (!recharge) return res.status(404).json({ error: 'Recarga não encontrada neste acesso.' });
+    if (recharge.status === 'pending' && (recharge.providerReference || recharge.providerChargeId)) recharge = await reconcileRecharge(recharge);
+    res.json({ recharge });
+  } catch (err) {
+    res.status(Number(err.status) >= 400 && Number(err.status) < 500 ? 400 : 502).json({ error: err.message });
+  }
 });
 app.post('/api/keys', requireAuth, csrf, async (req, res) => {
   const resellerId = Number(req.reseller?.id);

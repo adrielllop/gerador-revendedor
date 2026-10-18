@@ -5,7 +5,10 @@
   "description": "Painel local para proprietário e revendedores gerenciarem créditos e keys licenciadas.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check:worker": "node --check worker-index.mjs",
+    "test:worker": "node --test worker-license.test.mjs",
+    "deploy:worker": "wrangler deploy"
   },
   "engines": {
     "node": ">=20"
@@ -19,5 +22,8 @@
     "helmet": "^8.0.0",
     "localtunnel": "^2.0.2",
     "sql.js": "^1.14.2"
+  },
+  "devDependencies": {
+    "wrangler": "^4.36.0"
   }
 }

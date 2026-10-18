@@ -1,0 +1,17 @@
+name = "draco-license-bridge"
+main = "worker-index.mjs"
+compatibility_date = "2026-10-17"
+workers_dev = true
+
+[vars]
+FIREBASE_DATABASE_URL = "https://gerador-goldxits-default-rtdb.firebaseio.com"
+FIREBASE_DATABASE_PATH = "proxyAndroid/keys"
+
+# Limite por IP observado; pode afetar redes móveis compartilhadas.
+[[ratelimits]]
+name = "LICENSE_RATE_LIMITER"
+namespace_id = "927601"
+
+[ratelimits.simple]
+limit = 120
+period = 60

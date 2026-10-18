@@ -1,0 +1,4 @@
+# Copie para .dev.vars para testar o Worker localmente.
+# Preencha somente em ambiente privado; não envie valores ao GitHub.
+FIREBASE_CLIENT_EMAIL=
+FIREBASE_PRIVATE_KEY=
