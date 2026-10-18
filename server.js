@@ -126,6 +126,7 @@ db.exec(`
     password_hash TEXT NOT NULL,
     credits INTEGER NOT NULL DEFAULT 0 CHECK(credits >= 0),
     prefix TEXT NOT NULL DEFAULT 'GoldCheats',
+    prefix_unlocked INTEGER NOT NULL DEFAULT 0 CHECK(prefix_unlocked IN (0,1)),
     active INTEGER NOT NULL DEFAULT 1,
     former_username TEXT,
     removed_at TEXT,
@@ -192,6 +193,14 @@ const resellerColumns = new Set(db.prepare('PRAGMA table_info(resellers)').all()
 if (!resellerColumns.has('former_username')) db.exec('ALTER TABLE resellers ADD COLUMN former_username TEXT');
 if (!resellerColumns.has('removed_at')) db.exec('ALTER TABLE resellers ADD COLUMN removed_at TEXT');
 if (!resellerColumns.has('password_tag')) db.exec('ALTER TABLE resellers ADD COLUMN password_tag TEXT');
+if (!resellerColumns.has('prefix_unlocked')) {
+  db.exec('ALTER TABLE resellers ADD COLUMN prefix_unlocked INTEGER NOT NULL DEFAULT 0 CHECK(prefix_unlocked IN (0,1))');
+  const priorPrefixPurchases = db.prepare("SELECT DISTINCT actor FROM audit WHERE action='reseller_prefix_changed'").all();
+  for (const { actor } of priorPrefixPurchases) {
+    const reseller = db.prepare('SELECT id FROM resellers WHERE username=? AND removed_at IS NULL').get(actor);
+    if (reseller) db.prepare('UPDATE resellers SET prefix_unlocked=1 WHERE id=?').run(reseller.id);
+  }
+}
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_resellers_password_tag ON resellers(password_tag) WHERE password_tag IS NOT NULL');
 if (!db.prepare('SELECT id FROM rules LIMIT 1').get()) {
   db.prepare('INSERT INTO rules (name, credit_cost, separator, suffix_length, alphabet) VALUES (?, ?, ?, ?, ?)')
@@ -258,7 +267,7 @@ function csrf(req, res, next) {
 function requireAuth(req, res, next) {
   if (!req.session.user) return res.status(401).json({ error: 'Faça login para continuar.' });
   if (req.session.user.role === 'reseller') {
-    const reseller = db.prepare('SELECT id, username, credits, prefix, active, removed_at FROM resellers WHERE id = ?').get(req.session.user.id);
+    const reseller = db.prepare('SELECT id, username, credits, prefix, prefix_unlocked AS prefixUnlocked, active, removed_at FROM resellers WHERE id = ?').get(req.session.user.id);
     if (!reseller || !reseller.active || reseller.removed_at) return req.session.destroy(() => res.status(401).json({ error: 'O acesso do revendedor foi removido ou bloqueado pelo proprietário.' }));
     req.reseller = reseller;
   }
@@ -274,8 +283,8 @@ function canManageKey(req, key) {
 }
 function safeUser(req) {
   if (req.session.user.role === 'owner') return { role: 'owner', username: req.session.user.username || '' };
-  const r = req.reseller || db.prepare('SELECT id, username, credits, prefix, active FROM resellers WHERE id = ?').get(req.session.user.id);
-  return { role: 'reseller', id: r.id, username: r.username, credits: r.credits, prefix: r.prefix };
+  const r = req.reseller || db.prepare('SELECT id, username, credits, prefix, prefix_unlocked AS prefixUnlocked, active FROM resellers WHERE id = ?').get(req.session.user.id);
+  return { role: 'reseller', id: r.id, username: r.username, credits: r.credits, prefix: r.prefix, prefixUnlocked: Boolean(r.prefixUnlocked) };
 }
 function validateUsername(value) {
   const username = cleanText(value, 32);
@@ -637,7 +646,7 @@ app.post('/api/login', loginLimiter, csrf, async (req, res, next) => {
       req.session.save(err2 => {
         if (err2) return next(err2);
         audit(user.username || 'Dono', 'login', {});
-        if (user.role === 'reseller') req.reseller = db.prepare('SELECT id, username, credits, prefix, active FROM resellers WHERE id = ?').get(user.id);
+        if (user.role === 'reseller') req.reseller = db.prepare('SELECT id, username, credits, prefix, prefix_unlocked AS prefixUnlocked, active FROM resellers WHERE id = ?').get(user.id);
         res.json({ user: safeUser(req), csrfToken: req.session.csrfToken });
       });
     });
@@ -659,7 +668,7 @@ app.post('/api/register', registerLimiter, csrf, async (req, res, next) => {
       req.session.csrfToken = crypto.randomBytes(32).toString('hex');
       req.session.save(err2 => {
         if (err2) return next(err2);
-        req.reseller = db.prepare('SELECT id, username, credits, prefix, active FROM resellers WHERE id = ?').get(user.id);
+        req.reseller = db.prepare('SELECT id, username, credits, prefix, prefix_unlocked AS prefixUnlocked, active FROM resellers WHERE id = ?').get(user.id);
         res.status(201).json({ user: safeUser(req), csrfToken: req.session.csrfToken });
       });
     });
@@ -724,18 +733,20 @@ app.post('/api/reseller/prefix', requireAuth, csrf, (req, res) => {
   try {
     const prefix = normalizePrefix(validatePrefix(req.body.prefix));
     const update = db.transaction(() => {
-      const reseller = db.prepare('SELECT id, username, credits, prefix FROM resellers WHERE id=? AND active=1 AND removed_at IS NULL').get(req.reseller.id);
+      const reseller = db.prepare('SELECT id, username, credits, prefix, prefix_unlocked AS prefixUnlocked FROM resellers WHERE id=? AND active=1 AND removed_at IS NULL').get(req.reseller.id);
       if (!reseller) throw new Error('Conta não encontrada.');
       if (normalizePrefix(reseller.prefix) === prefix) {
-        return { ok: true, changed: false, prefix: reseller.prefix, credits: reseller.credits, cost: 0 };
+        return { ok: true, changed: false, prefix: reseller.prefix, credits: reseller.credits, prefixUnlocked: Boolean(reseller.prefixUnlocked), cost: 0 };
       }
       const otherPrefixes = db.prepare('SELECT id, prefix FROM resellers WHERE id<>? AND active=1 AND removed_at IS NULL').all(reseller.id);
       if (otherPrefixes.some(row => normalizePrefix(row.prefix) === prefix)) throw new Error('Esse prefixo já está em uso. Escolha outro.');
-      if (reseller.credits < RESELLER_PREFIX_COST) throw new Error('Saldo insuficiente. Definir ou trocar o prefixo custa 5 créditos.');
-      const balance = roundCredits(reseller.credits - RESELLER_PREFIX_COST);
-      db.prepare('UPDATE resellers SET prefix=?, credits=? WHERE id=?').run(prefix, balance, reseller.id);
-      audit(reseller.username, 'reseller_prefix_changed', { previousPrefix: reseller.prefix, prefix, cost: RESELLER_PREFIX_COST, balance });
-      return { ok: true, changed: true, prefix, credits: balance, cost: RESELLER_PREFIX_COST };
+      const alreadyUnlocked = Boolean(reseller.prefixUnlocked);
+      const cost = alreadyUnlocked ? 2 : RESELLER_PREFIX_COST;
+      if (reseller.credits < cost) throw new Error(`Saldo insuficiente. ${alreadyUnlocked ? 'Modificar' : 'Liberar'} o prefixo custa ${cost} créditos.`);
+      const balance = roundCredits(reseller.credits - cost);
+      db.prepare('UPDATE resellers SET prefix=?, credits=?, prefix_unlocked=1 WHERE id=?').run(prefix, balance, reseller.id);
+      audit(reseller.username, 'reseller_prefix_changed', { previousPrefix: reseller.prefix, prefix, cost, firstPurchase: !alreadyUnlocked, balance });
+      return { ok: true, changed: true, prefix, credits: balance, prefixUnlocked: true, unlockedNow: !alreadyUnlocked, cost };
     });
     res.json(update());
   } catch (err) { res.status(400).json({ error: err.message }); }
