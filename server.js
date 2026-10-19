@@ -480,18 +480,47 @@ async function firebaseRequestAtPath(pathname, options = {}) {
 }
 const firebaseAccountMirrorEnabled = () => Boolean((FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) || FIREBASE_AUTH_TOKEN);
 function firebaseResellerAccountKey(username) { return String(username).toLowerCase().replace(/\./g, ','); }
-async function mirrorResellerAccount(id) {
+async function mirrorResellerAccount(id, options = {}) {
   if (!firebaseAccountMirrorEnabled()) return false;
   const row = db.prepare('SELECT id, username, former_username AS formerUsername, password_hash AS passwordHash, password_tag AS passwordTag, credits, prefix, prefix_unlocked AS prefixUnlocked, active, removed_at AS removedAt, created_at AS createdAt FROM resellers WHERE id=?').get(id);
   if (!row) return false;
   const username = row.formerUsername || row.username;
+  const accountPath = `${FIREBASE_RESELLER_ACCOUNTS_PATH}/${firebaseResellerAccountKey(username)}`;
+  const localStats = db.prepare(`SELECT COUNT(*) AS paidRecharges, COALESCE(SUM(amount_cents),0) AS paidAmountCents,
+    COALESCE(SUM(purchased_credits),0) AS creditsPurchased, COALESCE(SUM(bonus_credits),0) AS bonusCredits,
+    COALESCE(SUM(total_credits),0) AS creditsReceived FROM recharges WHERE reseller_id=? AND status='paid'`).get(id);
+  const existing = await firebaseRequestAtPath(accountPath);
+  const rankingFields = ['paidAmountCents', 'paidRecharges', 'creditsPurchased', 'bonusCredits', 'creditsReceived'];
+  const hasRemoteStats = Boolean(existing && rankingFields.every(field => Number.isFinite(Number(existing[field]))));
+  let stats = hasRemoteStats ? {
+    paidRecharges: Number(existing.paidRecharges) || 0, paidAmountCents: Number(existing.paidAmountCents) || 0,
+    creditsPurchased: Number(existing.creditsPurchased) || 0, bonusCredits: Number(existing.bonusCredits) || 0,
+    creditsReceived: Number(existing.creditsReceived) || 0
+  } : { ...localStats };
+  const delta = options.paymentDelta || options.refundDelta;
+  if (delta) {
+    const direction = options.refundDelta ? -1 : 1;
+    if (hasRemoteStats) {
+      stats = {
+        paidRecharges: Math.max(0, stats.paidRecharges + direction),
+        paidAmountCents: Math.max(0, stats.paidAmountCents + direction * Number(delta.amountCents || 0)),
+        creditsPurchased: Math.max(0, stats.creditsPurchased + direction * Number(delta.creditsPurchased || 0)),
+        bonusCredits: Math.max(0, stats.bonusCredits + direction * Number(delta.bonusCredits || 0)),
+        creditsReceived: Math.max(0, stats.creditsReceived + direction * Number(delta.creditsReceived || 0))
+      };
+    } else {
+      stats = { ...localStats };
+    }
+  }
   const account = {
     id: Number(row.id), username, passwordHash: row.passwordHash, passwordTag: row.passwordTag || null,
     credits: Number(row.credits) || 0, prefix: row.prefix, prefixUnlocked: Boolean(row.prefixUnlocked),
     active: Boolean(row.active) && !row.removedAt, removedAt: row.removedAt || null, createdAt: row.createdAt || null,
-    passwordFormat: 'bcrypt'
+    passwordFormat: 'bcrypt', paidRecharges: Number(stats.paidRecharges) || 0,
+    paidAmountCents: Number(stats.paidAmountCents) || 0, creditsPurchased: Number(stats.creditsPurchased) || 0,
+    bonusCredits: Number(stats.bonusCredits) || 0, creditsReceived: Number(stats.creditsReceived) || 0
   };
-  await firebaseRequestAtPath(`${FIREBASE_RESELLER_ACCOUNTS_PATH}/${firebaseResellerAccountKey(username)}`, { method: 'PUT', body: account });
+  await firebaseRequestAtPath(accountPath, { method: 'PUT', body: account });
   return true;
 }
 async function restoreResellerAccount(username, password) {
@@ -610,13 +639,37 @@ function rechargeByIdFor(req, id) {
   if (!row || (req.session.user.role !== 'owner' && Number(row.resellerId) !== Number(req.reseller.id))) return null;
   return row;
 }
-function rechargeRanking() {
-  return db.prepare(`SELECT COALESCE(NULLIF(r.former_username,''),r.username) AS username,
+async function rechargeRanking() {
+  const localRows = db.prepare(`SELECT COALESCE(NULLIF(r.former_username,''),r.username) AS username,
     COUNT(*) AS paidRecharges, COALESCE(SUM(rc.amount_cents),0) AS paidAmountCents,
-    COALESCE(SUM(rc.total_credits),0) AS creditsReceived
+    COALESCE(SUM(rc.purchased_credits),0) AS creditsPurchased,
+    COALESCE(SUM(rc.bonus_credits),0) AS bonusCredits, COALESCE(SUM(rc.total_credits),0) AS creditsReceived
     FROM recharges rc JOIN resellers r ON r.id=rc.reseller_id
     WHERE rc.status='paid' GROUP BY r.id
-    ORDER BY paidAmountCents DESC, paidRecharges DESC, username COLLATE NOCASE ASC LIMIT 10`).all();
+    ORDER BY paidAmountCents DESC, paidRecharges DESC, username COLLATE NOCASE ASC`).all();
+  const ranked = new Map(localRows.map(row => [String(row.username).toLowerCase(), { ...row }]));
+  if (firebaseAccountMirrorEnabled()) {
+    const resellerIds = db.prepare("SELECT DISTINCT reseller_id AS id FROM recharges WHERE status='paid'").all().map(row => Number(row.id));
+    await Promise.all(resellerIds.map(id => mirrorResellerAccount(id).catch(err => {
+      console.warn('Não foi possível atualizar o resumo de compras no Firebase:', err.message);
+    })));
+    try {
+      const remoteAccounts = await firebaseRequestAtPath(FIREBASE_RESELLER_ACCOUNTS_PATH) || {};
+      for (const account of Object.values(remoteAccounts)) {
+        if (!account || !account.username || Number(account.paidRecharges) < 1) continue;
+        const key = String(account.username).toLowerCase();
+        const local = ranked.get(key);
+        const fields = ['paidRecharges', 'paidAmountCents', 'creditsPurchased', 'bonusCredits', 'creditsReceived'];
+        const merged = { username: account.username };
+        for (const field of fields) merged[field] = Math.max(Number(local?.[field]) || 0, Number(account[field]) || 0);
+        ranked.set(key, merged);
+      }
+    } catch (err) { console.warn('Não foi possível ler o ranking persistido no Firebase:', err.message); }
+  }
+  return [...ranked.values()].sort((a, b) => Number(b.paidAmountCents) - Number(a.paidAmountCents)
+    || Number(b.creditsPurchased) - Number(a.creditsPurchased)
+    || Number(b.paidRecharges) - Number(a.paidRecharges)
+    || String(a.username).localeCompare(String(b.username), 'pt-BR', { sensitivity: 'base' })).slice(0, 10);
 }
 async function applyRechargeEvent({ eventId, eventName, data }) {
   const externalReference = cleanText(data?.external_reference, 255);
@@ -646,19 +699,25 @@ async function applyRechargeEvent({ eventId, eventName, data }) {
         db.prepare(`UPDATE recharges SET status='paid', reseller_hidden_at=NULL, provider_charge_id=?, provider_reference=?, provider_status='paid', paid_at=COALESCE(?, CURRENT_TIMESTAMP), updated_at=CURRENT_TIMESTAMP WHERE id=?`)
           .run(providerChargeId, providerReference, data?.paid_at || null, recharge.id);
         audit(actor, 'recharge_paid', { rechargeId: recharge.id, purchasedCredits: recharge.purchased_credits, bonusCredits: recharge.bonus_credits, totalCredits: recharge.total_credits, balance: nextBalance });
-        return { handled: true, credited: true, status: 'paid', balance: nextBalance };
+      return { handled: true, credited: true, status: 'paid', balance: nextBalance };
       }
     } else if (eventName === 'payment.refunded') {
       db.prepare(`UPDATE recharges SET status='refunded', provider_charge_id=?, provider_reference=?, provider_status='refunded', updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(providerChargeId, providerReference, recharge.id);
       audit(actor, 'recharge_refunded', { rechargeId: recharge.id, totalCredits: recharge.total_credits });
-      return { handled: true, status: 'refunded' };
+      return { handled: true, refunded: recharge.status === 'paid', status: 'refunded' };
     }
     db.prepare('UPDATE recharges SET provider_charge_id=COALESCE(?, provider_charge_id), provider_reference=COALESCE(?, provider_reference), provider_status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
       .run(providerChargeId, providerReference, cleanText(data?.status || eventName, 40), recharge.id);
     return { handled: true, status: recharge.status };
   });
   const result = tx();
-  if (result.credited || result.duplicate) await mirrorResellerAccount(recharge.reseller_id);
+  const statsDelta = {
+    amountCents: Number(recharge.amount_cents), creditsPurchased: Number(recharge.purchased_credits),
+    bonusCredits: Number(recharge.bonus_credits), creditsReceived: Number(recharge.total_credits)
+  };
+  if (result.credited) await mirrorResellerAccount(recharge.reseller_id, { paymentDelta: statsDelta });
+  else if (result.refunded) await mirrorResellerAccount(recharge.reseller_id, { refundDelta: statsDelta });
+  else if (result.duplicate) await mirrorResellerAccount(recharge.reseller_id);
   return result;
 }
 async function reconcileRecharge(recharge) {
@@ -828,7 +887,7 @@ app.get('/api/dashboard', requireAuth, async (req, res, next) => {
         },
         resellers: db.prepare('SELECT id, username, credits, prefix, active, created_at AS createdAt FROM resellers WHERE removed_at IS NULL ORDER BY id DESC').all(),
         recharges: rechargeRowsFor(req),
-        rechargeRanking: rechargeRanking(),
+        rechargeRanking: await rechargeRanking(),
         keys,
         audit: combinedAudit
       });
