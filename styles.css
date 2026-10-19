@@ -788,3 +788,6 @@ html[data-theme="dark"] .form-stack input::placeholder, html[data-theme="dark"] 
 html[data-theme="dark"] .form-grid select option { color:#f0f2fb; background:#11162a; }
 html[data-theme="dark"] .ranking-metrics { display:grid; justify-items:end; gap:3px; }
 html[data-theme="dark"] .ranking-metrics small { color:#aab2c6; font-size:9px; }
+html[data-theme="dark"] .generate-controls label { color:#d5d9e8; }
+html[data-theme="dark"] .generate-controls input[type="number"] { color-scheme:dark; border-color:#353b55; color:#f0f2fb; background:#11162a; }
+html[data-theme="dark"] .generate-controls input[type="number"]:focus { border-color:#8e7bf3; background:#171c31; box-shadow:0 0 0 4px rgba(139,118,248,.16); }
