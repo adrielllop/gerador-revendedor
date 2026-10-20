@@ -640,6 +640,47 @@ function readFirebaseStatus(localKey, remote) {
   }
   return { ...localKey, status, deviceConnected: Boolean(deviceId), remainingText, firebaseExpiresAt: expiresAt || null };
 }
+function keyCreatedAtForStorage(value) {
+  if (Number.isFinite(Number(value)) && Number(value) > 0) return new Date(Number(value)).toISOString();
+  if (typeof value === 'string' && value.trim()) return value;
+  return new Date().toISOString();
+}
+function remoteKeyBelongsToReseller(value, remote, reseller) {
+  const username = String(reseller?.username || '').toLowerCase();
+  const remoteUsername = String(remote?.resellerUsername || remote?.reseller || '').toLowerCase();
+  if (remoteUsername && remoteUsername === username) return true;
+  if (Number(remote?.resellerId) === Number(reseller?.id)) return true;
+  const prefix = String(reseller?.prefix || '').trim().toUpperCase();
+  return Boolean(prefix && String(value || '').toUpperCase().startsWith(`${prefix}-`));
+}
+function durationPlanForRemoteKey(remote) {
+  const durationMs = Number(remote?.durationMs);
+  const exact = DURATION_PLANS.find(plan => durationMs > 0 && plan.durationMs === durationMs);
+  if (exact) return exact;
+  const unit = String(remote?.unit || '').toLowerCase();
+  const duration = Number(remote?.durationValue);
+  return DURATION_PLANS.find(plan => duration > 0 && plan.duration === duration && plan.unit === unit) || DURATION_PLANS[DURATION_PLANS.length - 1];
+}
+function syncResellerKeysFromFirebase(reseller, firebaseKeys) {
+  if (!reseller || !firebaseKeys || typeof firebaseKeys !== 'object') return 0;
+  const rule = db.prepare('SELECT id FROM rules WHERE active=1 ORDER BY id LIMIT 1').get();
+  if (!rule) return 0;
+  let restored = 0;
+  for (const [remoteId, remote] of Object.entries(firebaseKeys)) {
+    if (!remote || typeof remote !== 'object') continue;
+    const value = String(remote.key || remote.value || remoteId || '').trim();
+    if (!value || !remoteKeyBelongsToReseller(value, remote, reseller)) continue;
+    if (db.prepare('SELECT id FROM keys WHERE value=?').get(value)) continue;
+    const plan = durationPlanForRemoteKey(remote);
+    db.prepare(`INSERT OR IGNORE INTO keys
+      (reseller_id, rule_id, value, status, duration_value, duration_unit, credit_cost, created_at, updated_at)
+      VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, CURRENT_TIMESTAMP)`)
+      .run(Number(reseller.id), rule.id, value, plan.duration, plan.unit, Number(remote.creditCost) || plan.cost, keyCreatedAtForStorage(remote.createdAt));
+    restored++;
+  }
+  if (restored) console.log(`Sincronizadas ${restored} key(s) do Firebase para ${reseller.username}.`);
+  return restored;
+}
 function publicUrlFor(req, pathname) {
   const protocol = String(req.get('x-forwarded-proto') || (req.secure ? 'https' : 'http')).split(',')[0].trim();
   const host = req.get('host');
@@ -950,6 +991,7 @@ app.get('/api/dashboard', requireAuth, async (req, res, next) => {
     let firebaseKeys = {}, firebaseAvailable = true, firebaseError = '';
     try { firebaseKeys = await firebaseRequest(''); firebaseKeys = firebaseKeys && typeof firebaseKeys === 'object' ? firebaseKeys : {}; }
     catch (err) { firebaseAvailable = false; firebaseError = err.message; }
+    if (firebaseAvailable && req.session.user.role === 'reseller') syncResellerKeysFromFirebase(req.reseller, firebaseKeys);
     const firebaseKeyCount = Object.keys(firebaseKeys).length;
     const baseRows = req.session.user.role === 'owner'
       ? db.prepare(`SELECT k.id, k.value, k.status, k.duration_value AS durationValue, k.duration_unit AS durationUnit, k.credit_cost AS creditCost, k.created_at AS createdAt, k.updated_at AS updatedAt, COALESCE(NULLIF(r.former_username,''),r.username) AS reseller, r.prefix AS prefix FROM keys k JOIN resellers r ON r.id=k.reseller_id JOIN rules ru ON ru.id=k.rule_id ORDER BY k.id DESC LIMIT 200`).all()
@@ -1206,6 +1248,8 @@ app.post('/api/keys', requireAuth, csrf, async (req, res) => {
         // Expiração compatível com o cliente; no primeiro vínculo, o app recalcula agora + duração.
         expiresAt: createdAt + plan.durationMs,
         key: value,
+        resellerId,
+        resellerUsername: req.reseller.username,
         lastSeenAt: 0,
         paused: false,
         remainingMs: plan.durationMs,
