@@ -1322,6 +1322,7 @@ app.get(['/', '/index.html', '/ranking'], (req, res) => res.sendFile(path.join(R
 app.get('/app.js', (req, res) => res.type('application/javascript').sendFile(path.join(ROOT, 'app.js')));
 app.get('/styles.css', (req, res) => res.type('text/css').sendFile(path.join(ROOT, 'styles.css')));
 app.get('/keydesk-logo.png', (req, res) => res.type('png').sendFile(path.join(ROOT, 'keydesk-logo.png')));
+app.get('/keydesk-tabela-desconto.png', (req, res) => res.type('png').sendFile(path.join(ROOT, 'keydesk-tabela-desconto.png')));
 app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
 app.use((err, req, res, next) => {
   console.error(err);
