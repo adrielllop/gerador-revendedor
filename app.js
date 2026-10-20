@@ -8,6 +8,18 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':
 const date = (v) => v ? new Date(v.replace(' ', 'T') + (v.includes('Z') ? '' : 'Z')).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
 const creditText = (v) => new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(Number(v) || 0);
 const money = (cents) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((Number(cents) || 0) / 100);
+function rechargeDiscountPercent(credits) {
+  if (credits >= 251) return 22;
+  if (credits >= 91) return 16;
+  if (credits >= 81) return 14;
+  if (credits >= 71) return 12;
+  if (credits >= 61) return 10;
+  if (credits >= 51) return 8;
+  if (credits >= 41) return 6;
+  if (credits >= 31) return 4;
+  if (credits >= 20) return 1;
+  return 0;
+}
 const durationText = (k) => `${k.durationValue} ${k.durationUnit === 'hours' ? (Number(k.durationValue) === 1 ? 'hora' : 'horas') : (Number(k.durationValue) === 1 ? 'dia' : 'dias')}`;
 function toast(message, kind='success') {
   const el = document.createElement('div'); el.className = `toast ${kind}`; el.textContent = message; toastRegion.appendChild(el);
@@ -84,6 +96,7 @@ function authScreen() {
         <button id="authSubmit" class="button primary full auth-submit" type="submit">Entrar <span>→</span></button>
       </form>
       <button id="authToggle" class="text-button auth-toggle" type="button">Criar cadastro de revendedor</button>
+      <a class="text-button auth-public-ranking" href="/ranking">Ver ranking público do mês →</a>
       <div class="auth-note"><span class="auth-note-icon">✓</span><p><b>Privacidade protegida</b><span id="authNoteText">Seus dados de acesso são protegidos.</span></p></div>
     </div><div class="auth-copyright">KEYDESK <span>·</span> AMBIENTE PRIVADO</div></section>
   </main>`;
@@ -169,7 +182,7 @@ function rechargeBadge(status) {
 }
 function topbar() {
   const owner = state.user.role === 'owner';
-  const tabs = owner ? [['overview','Visão geral'],['resellers','Revendedores'],['recharges','Recargas'],['ranking','Ranking'],['keys','Keys'],['activity','Atividade']] : [['overview','Visão geral'],['recharges','Recargas'],['keys','Minhas keys']];
+  const tabs = owner ? [['overview','Visão geral'],['resellers','Revendedores'],['recharges','Recargas'],['ranking','Ranking'],['keys','Keys'],['activity','Atividade']] : [['overview','Visão geral'],['recharges','Recargas'],['ranking','Ranking'],['keys','Minhas keys']];
   return `<header class="topbar"><a class="brand-mini" href="#"><img class="brand-logo-mark" src="./keydesk-logo.png" alt="Logo Keydesk"><span>KEYDESK</span></a>
     <nav class="main-nav">${tabs.map(([id,label]) => `<button class="nav-link ${state.tab===id?'selected':''}" data-tab="${id}">${label}</button>`).join('')}</nav>
     <div class="top-user"><div class="avatar">${owner?'K':esc((state.user.username||'R')[0].toUpperCase())}</div><div class="user-meta"><strong>${owner?'KEYDESK':esc(state.user.username)}</strong><span>Conta</span></div><button class="icon-button theme-toggle" data-action="toggle-theme" title="Alternar tema claro/escuro" aria-label="Ativar tema ${state.theme==='dark'?'claro':'escuro'}">${state.theme==='dark'?'☀':'◐'}</button><button class="icon-button" data-action="logout" title="Sair" aria-label="Sair">↗</button></div></header>`;
@@ -188,6 +201,12 @@ function pageSubtitle() {
 }
 function statCard(label,value,sub,icon) { return `<article class="stat-card"><div class="stat-top"><span>${label}</span><span class="stat-icon">${icon}</span></div><div class="stat-number">${value}</div><div class="stat-sub">${sub}</div></article>`; }
 function currentRankingMonthLabel() { return new Intl.DateTimeFormat('pt-BR',{month:'long',year:'numeric',timeZone:'America/Sao_Paulo'}).format(new Date()); }
+function rankingMonthLabel(monthKey) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(monthKey || ''));
+  if (!match) return currentRankingMonthLabel();
+  return new Intl.DateTimeFormat('pt-BR',{month:'long',year:'numeric',timeZone:'America/Sao_Paulo'})
+    .format(new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 15, 12)));
+}
 function ownerOverview() {
   const m=state.data.metrics; const recent=state.data.keys.slice(0,5); const ranking=state.data.rechargeRanking||[];
   const firebaseNotice=state.data.firebaseAvailable?`<section class="notice live-notice"><span class="notice-icon">✓</span><div><b>Realtime Database conectado</b><p>Path <code>${esc(state.data.firebasePath||'/proxyAndroid/keys')}</code> · ${Number(state.data.firebaseKeyCount)||0} registro(s) lido(s). Keys emitidas são gravadas nesse caminho.</p></div><span class="live-pill"><i></i> online</span></section>`:`<section class="notice warning"><span class="notice-icon">!</span><div><b>Firebase indisponível</b><p>${esc(state.data.firebaseError||'O painel não conseguiu consultar o Realtime Database. Verifique conexão e regras de acesso.')}</p></div></section>`;
@@ -208,7 +227,27 @@ function rankingPage() {
   const totalCredits = ranking.reduce((sum, row) => sum + (Number(row.creditsRecharged) || 0), 0);
   const confirmedCount = ranking.reduce((sum, row) => sum + (Number(row.paidRecharges) || 0), 0);
   return `<section class="ranking-hero"><div><span class="eyebrow">${esc(currentRankingMonthLabel())}</span><h2>Top 5 do mês</h2><p>Quem mais recarregou créditos em pagamentos confirmados neste mês.</p></div><div class="ranking-hero-stats"><div><small>Créditos recarregados no top 5</small><b>${creditText(totalCredits)}</b></div><div><small>Recargas confirmadas</small><b>${confirmedCount}</b></div></div></section>
+    <div class="ranking-share-action"><a class="button secondary" href="/ranking" target="_blank" rel="noopener">Abrir ranking público <span>↗</span></a></div>
     ${ownerRechargeRankingPanel(ranking,true)}`;
+}
+async function publicRankingPage() {
+  document.title = 'Top 5 público — Keydesk';
+  loading();
+  try {
+    const result = await api('/api/public/ranking', { cache:'no-store' });
+    const ranking = Array.isArray(result.ranking) ? result.ranking : [];
+    const totalCredits = ranking.reduce((sum, row) => sum + (Number(row.creditsRecharged) || 0), 0);
+    const confirmedCount = ranking.reduce((sum, row) => sum + (Number(row.paidRecharges) || 0), 0);
+    const monthLabel = rankingMonthLabel(result.monthKey);
+    document.title = `Top 5 público — ${monthLabel} | Keydesk`;
+    appRoot.innerHTML = `<header class="topbar public-ranking-header"><a class="brand-mini" href="/" aria-label="Keydesk — voltar ao acesso"><img class="brand-logo-mark" src="./keydesk-logo.png" alt=""><span>KEYDESK</span></a><div class="top-user"><button class="icon-button theme-toggle" data-action="toggle-theme" type="button" title="Alternar tema claro/escuro" aria-label="Ativar tema ${state.theme==='dark'?'claro':'escuro'}">${state.theme==='dark'?'☀':'◐'}</button><a class="button primary" href="/">Acessar painel <span>→</span></a></div></header>
+      <main class="page public-ranking-page"><div class="page-head"><div><div class="eyebrow">RANKING PÚBLICO · ${esc(monthLabel)}</div><h1>Top 5 de recargas</h1><p>Veja quem mais comprou créditos em pagamentos confirmados neste mês.</p></div></div>
+        <section class="ranking-hero"><div><span class="eyebrow">${esc(monthLabel)}</span><h2>Top 5 do mês</h2><p>Classificação pelas recargas pagas e confirmadas no mês, no fuso de São Paulo.</p></div><div class="ranking-hero-stats"><div><small>Créditos recarregados no Top 5</small><b>${creditText(totalCredits)}</b></div><div><small>Recargas confirmadas</small><b>${confirmedCount}</b></div></div></section>
+        <section class="panel ranking-panel ranking-page-panel"><div class="panel-head"><div><span class="eyebrow">RANKING MENSAL · ${esc(monthLabel)}</span><h3>Top 5 — quem mais recarregou créditos</h3><p>O bônus aparece separado; pagamentos pendentes e estornados não entram.</p></div><span class="step-chip">PÚBLICO</span></div>${ranking.length?rankingRows(ranking,true):empty('Ainda sem recargas pagas neste mês','Após a confirmação de um Pix neste mês, a pessoa e os créditos recarregados aparecerão aqui.')}<p class="public-ranking-note">Esta página é pública. Ela mostra os usuários classificados, créditos comprados, Pix confirmados, bônus e valores pagos do Top 5.</p></section>
+        <footer class="footer">KEYDESK · Ranking mensal público · Atualizado ao abrir.</footer></main>`;
+  } catch (err) {
+    appRoot.innerHTML = `<main class="error-screen"><div class="brand-mark">K</div><h1>Não foi possível carregar o ranking</h1><p>${esc(err.message)}</p><p><a class="button secondary" href="/ranking">Tentar novamente</a> <a class="button primary" href="/">Voltar ao acesso</a></p></main>`;
+  }
 }
 function resellerOverview() {
   const plans=state.data.plans; const selected=plans.some(p=>p.id===state.selectedPlan)?state.selectedPlan:(state.selectedPlan=plans[0]?.id||'1h');
@@ -228,7 +267,7 @@ function resellerOverview() {
 }
 function rechargePage() {
   const owner=state.user.role==='owner'; const rows=state.data.recharges;
-  const form = owner ? '' : `<section class="panel recharge-panel"><div class="panel-head"><div><span class="eyebrow">RECARGA VIA PIX</span><h3>Adicione créditos ao seu saldo</h3><p>Você paga R$ 1,00 por crédito comprado. A cada 10 pagos, ganha 1 crédito extra.</p></div><span class="step-chip">BOTA PIX</span></div><form id="rechargeForm" class="recharge-form"><label>Quantos créditos deseja comprar?<input id="rechargeCredits" name="credits" type="number" min="1" max="10000" step="1" value="10" required></label><div class="recharge-summary"><div><span>Valor no Pix</span><strong id="rechargeAmount">R$ 10,00</strong></div><div><span>Crédito brinde</span><strong id="rechargeBonus">+1</strong></div><div><span>Total no saldo</span><strong id="rechargeTotal">11 créditos</strong></div></div><button class="button primary" type="submit">Criar cobrança Pix <span>→</span></button></form><div class="format-note recharge-note"><span>✓</span><p>A cobrança abre em uma página segura do BotaPix. O saldo só é liberado depois da confirmação do pagamento.</p></div></section>`;
+  const form = owner ? '' : `<section class="panel recharge-panel"><div class="panel-head"><div><span class="eyebrow">RECARGA VIA PIX</span><h3>Adicione créditos ao seu saldo</h3><p>R$ 1,00 por crédito antes do desconto. A cada 10 pagos, ganha 1 crédito extra.</p></div><span class="step-chip">BOTA PIX</span></div><form id="rechargeForm" class="recharge-form"><label>Quantos créditos deseja comprar?<input id="rechargeCredits" name="credits" type="number" min="1" max="10000" step="1" value="10" required></label><div class="recharge-summary"><div><span>Preço original</span><strong id="rechargeOriginalAmount">R$ 10,00</strong></div><div><span>Desconto</span><strong id="rechargeDiscount">-0%</strong></div><div><span>Valor no Pix</span><strong id="rechargeAmount">R$ 10,00</strong></div><div><span>Total no saldo</span><strong id="rechargeTotal">11 créditos</strong><small id="rechargeBonus">+1 brinde</small></div></div><button class="button primary" type="submit">Criar cobrança Pix <span>→</span></button></form><div class="format-note recharge-note"><span>✓</span><p><b>Descontos:</b> de 20 a 30 créditos: 1%; 31 a 40: 4%; 41 a 50: 6%; 51 a 60: 8%; 61 a 70: 10%; 71 a 80: 12%; 81 a 90: 14%; 91 a 250: 16%; a partir de 251: 22%. A cobrança abre em uma página segura do BotaPix e o saldo só é liberado após a confirmação.</p></div></section>`;
   return `${form}${owner?ownerRechargeRankingPanel(state.data.rechargeRanking||[],true):''}<section class="panel"><div class="panel-head"><div><span class="eyebrow">${owner?'HISTÓRICO GERAL':'SEU HISTÓRICO'}</span><h3>Recargas</h3><p>${owner?'Pagamentos e créditos concedidos aos revendedores.':'Acompanhe cobranças, Pix pendentes e créditos recebidos.'}</p></div><span class="step-chip">${rows.length} REGISTRO${rows.length===1?'':'S'}</span></div>${rows.length?rechargeTable(rows,owner):empty('Nenhuma recarga ainda',owner?'As recargas dos revendedores aparecerão aqui.':'Escolha uma quantidade acima para criar sua primeira cobrança Pix.')}</section>`;
 }
 function rechargeTable(rows,owner) {
@@ -257,7 +296,7 @@ function render() {
   if (state.tab==='overview') content=state.user.role==='owner'?ownerOverview():resellerOverview();
   if (state.tab==='resellers') content=resellersPage();
   if (state.tab==='recharges') content=rechargePage();
-  if (state.tab==='ranking' && state.user.role==='owner') content=rankingPage();
+  if (state.tab==='ranking') content=rankingPage();
   if (state.tab==='keys') content=keysPage();
   if (state.tab==='activity') content=activityPage();
   shell(content);
@@ -267,9 +306,9 @@ function formObject(form) { return Object.fromEntries(new FormData(form).entries
 async function refresh(message) { await loadData(); if(message) toast(message); }
 function updateRechargePreview() {
   const input=document.getElementById('rechargeCredits'); if(!input) return;
-  const credits=Math.max(0, Math.floor(Number(String(input.value).replace(',','.'))||0)); const bonus=Math.floor(credits/10);
-  const amount=document.getElementById('rechargeAmount'); const bonusEl=document.getElementById('rechargeBonus'); const total=document.getElementById('rechargeTotal');
-  if(amount) amount.textContent=money(credits*100); if(bonusEl) bonusEl.textContent=`+${creditText(bonus)}`; if(total) total.textContent=`${creditText(credits+bonus)} crédito${credits+bonus===1?'':'s'}`;
+  const credits=Math.max(0, Math.floor(Number(String(input.value).replace(',','.'))||0)); const bonus=Math.floor(credits/10); const discount=rechargeDiscountPercent(credits); const original=credits*100; const amount=Math.round(original*(100-discount)/100);
+  const amountEl=document.getElementById('rechargeAmount'); const originalEl=document.getElementById('rechargeOriginalAmount'); const discountEl=document.getElementById('rechargeDiscount'); const bonusEl=document.getElementById('rechargeBonus'); const total=document.getElementById('rechargeTotal');
+  if(originalEl) originalEl.textContent=money(original); if(discountEl) discountEl.textContent=`-${discount}%`; if(amountEl) amountEl.textContent=money(amount); if(bonusEl) bonusEl.textContent=`+${creditText(bonus)}`; if(total) total.textContent=`${creditText(credits+bonus)} crédito${credits+bonus===1?'':'s'}`;
 }
 appRoot.addEventListener('click', async e => {
   const passwordToggle=e.target.closest('[data-password-target]');
@@ -327,7 +366,7 @@ appRoot.addEventListener('submit', async e => {
         const out=await api('/api/recharges',{method:'POST',body:JSON.stringify({credits:Number(form.elements.credits.value)})});
         await loadData();
         if(paymentWindow) paymentWindow.location.replace(out.paymentUrl); else location.href=out.paymentUrl;
-        toast(`Cobrança de ${money(out.amountCents)} criada. Pague no Pix para receber ${creditText(out.totalCredits)} créditos.`);
+        toast(`Cobrança de ${money(out.amountCents)} criada${out.discountPercent ? ` com ${out.discountPercent}% de desconto` : ''}. Pague no Pix para receber ${creditText(out.totalCredits)} créditos.`);
       } catch(err) { if(paymentWindow) paymentWindow.close(); throw err; } finally { button.disabled=false; }
     }
   }catch(err){toast(err.message,'error');}
@@ -342,6 +381,10 @@ async function refreshPendingRecharges() {
 async function init() {
   if (location.protocol === 'file:') {
     appRoot.innerHTML = '<main class="error-screen"><div class="brand-mark">K</div><h1>Abra pelo Termux</h1><p>Este arquivo ZIP não é o servidor do painel. Extraia os arquivos, execute <code>bash SERVICO_24H.sh start</code> no Termux e abra <code>http://127.0.0.1:3000</code>. Para outras pessoas, compartilhe o link HTTPS mostrado pelo gerenciador.</p></main>';
+    return;
+  }
+  if (location.pathname.replace(/\/+$/, '') === '/ranking') {
+    await publicRankingPage();
     return;
   }
   loading();

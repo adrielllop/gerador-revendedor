@@ -395,7 +395,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .recharge-form > label { display: grid; gap: 7px; color: #4c5267; font-size: 10px; font-weight: 720; }
 .recharge-form input { width: 100%; height: 47px; padding: 0 13px; border: 1px solid #e0e4ef; border-radius: 11px; color: var(--ink); background: #fff; outline: none; }
 .recharge-form input:focus { border-color: #a296ff; box-shadow: 0 0 0 4px rgba(112,87,244,.10); }
-.recharge-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; min-height: 47px; padding: 7px 10px; border: 1px solid #ebe8ff; border-radius: 11px; background: #f8f7ff; }
+.recharge-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; min-height: 47px; padding: 7px 10px; border: 1px solid #ebe8ff; border-radius: 11px; background: #f8f7ff; }
 .recharge-summary div { display: grid; align-content: center; gap: 2px; padding: 0 9px; border-right: 1px solid #e8e4ff; }
 .recharge-summary div:last-child { border-right: 0; }
 .recharge-summary span { color: #8e91a8; font-size: 8px; }
@@ -415,7 +415,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .duration-plans { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .recharge-form { grid-template-columns: 1fr; gap: 11px; }
   .recharge-form > .button { grid-column: auto; width: 100%; }
-  .recharge-summary { min-height: 62px; }
+  .recharge-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); min-height: 62px; }
   .recharge-summary div { padding: 0 6px; }
   .recharge-summary strong { font-size: 11px; }
 }
@@ -674,6 +674,13 @@ body {
 .ranking-hero-stats small { color: #d1d4eb; font-size: 9px; }
 .ranking-hero-stats b { color: #fff; font-size: 20px; letter-spacing: -.04em; }
 .ranking-page-panel { max-width: 980px; }
+.public-ranking-header .top-user { gap: 13px; }
+.public-ranking-page { max-width: 1120px; }
+.public-ranking-page > .page-head { margin-top: 6px; }
+.public-ranking-note { margin: 16px 0 2px; color: var(--muted); font-size: 10px; line-height: 1.65; }
+.auth-public-ranking { display: flex; justify-content: center; width: 100%; margin-top: 5px; white-space: normal; text-align: center; }
+.ranking-share-action { display: flex; justify-content: flex-end; margin: -3px 0 12px; }
+.ranking-share-action a { text-decoration: none; }
 .ranking-row-large { min-height: 77px; padding-inline: 10px; }
 .ranking-row-large .ranking-position { width: 42px; height: 42px; font-size: 14px; }
 .ranking-row-large .ranking-person b { font-size: 13px; }
@@ -764,6 +771,10 @@ html[data-theme="dark"] .toast.error { background:#87374f; }
   .ranking-hero-stats { width:100%; }
   .ranking-hero-stats > div { min-width:0; flex:1; padding:13px; }
   .ranking-hero-stats b { font-size:16px; }
+  .public-ranking-header { gap: 10px; padding-right: 14px; padding-left: 14px; }
+  .public-ranking-header .top-user { gap: 7px; }
+  .public-ranking-header .button { min-height: 38px; gap: 7px; padding: 0 11px; font-size: 10px; }
+  .ranking-share-action { justify-content: flex-start; }
   .auth-brand-head .brand-logo-auth { width:51px; height:51px; }
   .auth-card-top { flex-wrap:wrap; gap:9px; }
   .auth-card-top .auth-secure-badge { margin-left:0; }

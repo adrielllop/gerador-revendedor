@@ -256,6 +256,7 @@ app.use((req, res, next) => {
 });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHeaders: true, legacyHeaders: false, message: { error: 'Muitas tentativas. Aguarde 15 minutos e tente novamente.' } });
 const registerLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: { error: 'Limite de cadastros atingido neste momento. Tente novamente mais tarde.' } });
+const publicRankingLimiter = rateLimit({ windowMs: 60 * 1000, limit: 60, standardHeaders: true, legacyHeaders: false, message: { error: 'Muitas consultas ao ranking. Aguarde um minuto e tente novamente.' } });
 const generationLocks = new Set();
 const pendingFirebaseAuditWrites = new Set();
 const ownerFileExists = () => fs.existsSync(OWNER_FILE);
@@ -664,11 +665,26 @@ async function botapixRequest(endpoint, options = {}) {
   }
   return payload?.data ?? payload;
 }
+function rechargeDiscountPercent(credits) {
+  if (credits >= 251) return 22;
+  if (credits >= 91) return 16;
+  if (credits >= 81) return 14;
+  if (credits >= 71) return 12;
+  if (credits >= 61) return 10;
+  if (credits >= 51) return 8;
+  if (credits >= 41) return 6;
+  if (credits >= 31) return 4;
+  if (credits >= 20) return 1;
+  return 0;
+}
 function parseRechargeCredits(value) {
   const credits = Number(String(value ?? '').replace(',', '.'));
   if (!Number.isSafeInteger(credits) || credits < 1 || credits > 10000) throw new Error('Escolha de 1 a 10.000 créditos para a recarga.');
   const bonusCredits = Math.floor(credits / 10);
-  return { purchasedCredits: credits, bonusCredits, totalCredits: credits + bonusCredits, amountCents: credits * 100 };
+  const discountPercent = rechargeDiscountPercent(credits);
+  const originalAmountCents = credits * 100;
+  const amountCents = Math.round(originalAmountCents * (100 - discountPercent) / 100);
+  return { purchasedCredits: credits, bonusCredits, totalCredits: credits + bonusCredits, originalAmountCents, discountPercent, amountCents };
 }
 function rechargeRowsFor(req) {
   const owner = req.session.user.role === 'owner';
@@ -690,7 +706,7 @@ function rechargeByIdFor(req, id) {
   if (!row || (req.session.user.role !== 'owner' && Number(row.resellerId) !== Number(req.reseller.id))) return null;
   return row;
 }
-async function rechargeRanking() {
+async function rechargeRanking({ syncLocal = true } = {}) {
   const monthKey = brazilMonthKey();
   const ranked = new Map();
   const localRows = db.prepare(`SELECT r.id AS resellerId, COALESCE(NULLIF(r.former_username,''),r.username) AS username,
@@ -713,9 +729,11 @@ async function rechargeRanking() {
     ranked.set(key, row);
   }
   if (firebaseAccountMirrorEnabled()) {
-    await Promise.all([...resellerIds].map(id => mirrorResellerAccount(id).catch(err => {
-      console.warn('Não foi possível atualizar o resumo de compras no Firebase:', err.message);
-    })));
+    if (syncLocal) {
+      await Promise.all([...resellerIds].map(id => mirrorResellerAccount(id).catch(err => {
+        console.warn('Não foi possível atualizar o resumo de compras no Firebase:', err.message);
+      })));
+    }
     try {
       const remoteAccounts = await firebaseRequestAtPath(FIREBASE_RESELLER_ACCOUNTS_PATH) || {};
       for (const account of Object.values(remoteAccounts)) {
@@ -738,6 +756,22 @@ async function rechargeRanking() {
     || Number(b.paidRecharges) - Number(a.paidRecharges)
     || String(a.username).localeCompare(String(b.username), 'pt-BR', { sensitivity: 'base' })).slice(0, 5);
 }
+app.get('/api/public/ranking', publicRankingLimiter, async (req, res, next) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const ranking = await rechargeRanking({ syncLocal: false });
+    res.json({
+      monthKey: brazilMonthKey(),
+      ranking: ranking.map(row => ({
+        username: String(row.username || ''),
+        creditsRecharged: Number(row.creditsRecharged) || 0,
+        paidRecharges: Number(row.paidRecharges) || 0,
+        bonusCredits: Number(row.bonusCredits) || 0,
+        paidAmountCents: Number(row.paidAmountCents) || 0
+      }))
+    });
+  } catch (err) { next(err); }
+});
 async function applyRechargeEvent({ eventId, eventName, data }) {
   const externalReference = cleanText(data?.external_reference, 255);
   if (!externalReference) return { handled: false };
@@ -960,7 +994,7 @@ app.get('/api/dashboard', requireAuth, async (req, res, next) => {
         audit: combinedAudit
       });
     } else {
-      res.json({ user: safeUser(req), rules, plans, recharges: rechargeRowsFor(req), keys });
+      res.json({ user: safeUser(req), rules, plans, recharges: rechargeRowsFor(req), rechargeRanking: await rechargeRanking({ syncLocal: false }), keys });
     }
   } catch (err) { next(err); }
 });
@@ -1102,7 +1136,7 @@ app.post('/api/recharges', requireAuth, csrf, async (req, res) => {
       .run(Number(charge.id) || null, cleanText(charge.reference, 255) || null, String(charge.payment_url), cleanText(charge.status || 'pending', 40), rechargeId);
     audit(req.reseller.username, 'recharge_created', { rechargeId, amountCents: plan.amountCents, purchasedCredits: plan.purchasedCredits, bonusCredits: plan.bonusCredits, totalCredits: plan.totalCredits });
     if (charge.status === 'paid') await applyRechargeEvent({ eventId: `creation-${rechargeId}-paid`, eventName: 'payment.confirmed', data: { ...charge, external_reference: externalReference, amount: plan.amountCents, amount_paid: plan.amountCents } });
-    res.status(201).json({ id: rechargeId, amountCents: plan.amountCents, purchasedCredits: plan.purchasedCredits, bonusCredits: plan.bonusCredits, totalCredits: plan.totalCredits, paymentUrl: charge.payment_url, status: charge.status || 'pending' });
+    res.status(201).json({ id: rechargeId, amountCents: plan.amountCents, originalAmountCents: plan.originalAmountCents, discountPercent: plan.discountPercent, purchasedCredits: plan.purchasedCredits, bonusCredits: plan.bonusCredits, totalCredits: plan.totalCredits, paymentUrl: charge.payment_url, status: charge.status || 'pending' });
   } catch (err) {
     if (err.message.includes('SQLITE') || err.message.includes('UNIQUE')) return res.status(400).json({ error: 'Não foi possível registrar a recarga.' });
     res.status(Number(err.status) >= 400 && Number(err.status) < 500 ? 400 : 503).json({ error: err.message });
@@ -1284,7 +1318,7 @@ app.delete('/api/keys/:id', requireAuth, csrf, async (req, res) => {
     res.json({ ok: true });
   } catch (err) { res.status(502).json({ error: actionErrorForUser(req, err) }); }
 });
-app.get(['/', '/index.html'], (req, res) => res.sendFile(path.join(ROOT, 'index.html')));
+app.get(['/', '/index.html', '/ranking'], (req, res) => res.sendFile(path.join(ROOT, 'index.html')));
 app.get('/app.js', (req, res) => res.type('application/javascript').sendFile(path.join(ROOT, 'app.js')));
 app.get('/styles.css', (req, res) => res.type('text/css').sendFile(path.join(ROOT, 'styles.css')));
 app.get('/keydesk-logo.png', (req, res) => res.type('png').sendFile(path.join(ROOT, 'keydesk-logo.png')));
