@@ -8,17 +8,15 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':
 const date = (v) => v ? new Date(v.replace(' ', 'T') + (v.includes('Z') ? '' : 'Z')).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
 const creditText = (v) => new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(Number(v) || 0);
 const money = (cents) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((Number(cents) || 0) / 100);
-function rechargeDiscountPercent(credits) {
-  if (credits >= 251) return 22;
-  if (credits >= 91) return 16;
-  if (credits >= 81) return 14;
-  if (credits >= 71) return 12;
-  if (credits >= 61) return 10;
-  if (credits >= 51) return 8;
-  if (credits >= 41) return 6;
-  if (credits >= 31) return 4;
-  if (credits >= 20) return 1;
-  return 0;
+function rechargeUnitPriceCents(credits) {
+  if (credits >= 1000) return 45;
+  if (credits >= 500) return 50;
+  if (credits >= 200) return 55;
+  if (credits >= 100) return 60;
+  if (credits >= 50) return 65;
+  if (credits >= 20) return 70;
+  if (credits >= 10) return 75;
+  return 100;
 }
 const durationText = (k) => `${k.durationValue} ${k.durationUnit === 'hours' ? (Number(k.durationValue) === 1 ? 'hora' : 'horas') : (Number(k.durationValue) === 1 ? 'dia' : 'dias')}`;
 function toast(message, kind='success') {
@@ -269,7 +267,7 @@ function resellerOverview() {
 }
 function rechargePage() {
   const owner=state.user.role==='owner'; const rows=state.data.recharges;
-  const form = owner ? '' : `<section class="panel recharge-panel"><div class="panel-head"><div><span class="eyebrow">RECARGA VIA PIX</span><h3>Adicione créditos ao seu saldo</h3><p>R$ 1,00 por crédito antes do desconto. A cada 10 pagos, ganha 1 crédito extra.</p></div><span class="step-chip">BOTA PIX</span></div><form id="rechargeForm" class="recharge-form"><label>Quantos créditos deseja comprar?<input id="rechargeCredits" name="credits" type="number" min="1" max="10000" step="1" value="10" required></label><div class="recharge-summary"><div><span>Preço original</span><strong id="rechargeOriginalAmount">R$ 10,00</strong></div><div><span>Desconto</span><strong id="rechargeDiscount">-0%</strong></div><div><span>Valor no Pix</span><strong id="rechargeAmount">R$ 10,00</strong></div><div><span>Total no saldo</span><strong id="rechargeTotal">11 créditos</strong><small id="rechargeBonus">+1 brinde</small></div></div><button class="button primary" type="submit">Criar cobrança Pix <span>→</span></button></form><div class="format-note recharge-note"><span>✓</span><p><b>Descontos:</b> de 20 a 30 créditos: 1%; 31 a 40: 4%; 41 a 50: 6%; 51 a 60: 8%; 61 a 70: 10%; 71 a 80: 12%; 81 a 90: 14%; 91 a 250: 16%; a partir de 251: 22%. A cobrança abre em uma página segura do BotaPix e o saldo só é liberado após a confirmação.</p></div></section>`;
+  const form = owner ? '' : `<section class="panel recharge-panel"><div class="panel-head"><div><span class="eyebrow">RECARGA VIA PIX</span><h3>Adicione créditos ao seu saldo</h3><p>Quanto mais créditos você compra, menor fica o preço de cada crédito. A cada 10 pagos, ganha 1 crédito extra.</p></div><span class="step-chip">BOTA PIX</span></div><form id="rechargeForm" class="recharge-form"><label>Quantos créditos deseja comprar?<input id="rechargeCredits" name="credits" type="number" min="1" max="10000" step="1" value="10" required></label><div class="recharge-summary"><div><span>Preço por crédito</span><strong id="rechargeUnitPrice">R$ 0,75</strong></div><div><span>Preço original</span><strong id="rechargeOriginalAmount">R$ 10,00</strong></div><div><span>Economia</span><strong id="rechargeDiscount">R$ 2,50</strong><small id="rechargeDiscountPercent">25% OFF</small></div><div><span>Valor no Pix</span><strong id="rechargeAmount">R$ 7,50</strong></div><div><span>Créditos bônus</span><strong id="rechargeBonus">+1</strong></div><div><span>Total no saldo</span><strong id="rechargeTotal">11 créditos</strong></div></div><button class="button primary" type="submit">Criar cobrança Pix <span>→</span></button></form><div class="format-note recharge-note"><span>✓</span><p><b>Tabela de preço por crédito:</b> 10–19 = R$ 0,75; 20–49 = R$ 0,70; 50–99 = R$ 0,65; 100–199 = R$ 0,60; 200–499 = R$ 0,55; 500–999 = R$ 0,50; 1.000 ou mais = R$ 0,45. De 1 a 9 créditos, o preço é R$ 1,00 cada. O bônus de 1 crédito a cada 10 comprados é mostrado na prévia.</p></div></section>`;
   return `${form}${owner?ownerRechargeRankingPanel(state.data.rechargeRanking||[],true):''}<section class="panel"><div class="panel-head"><div><span class="eyebrow">${owner?'HISTÓRICO GERAL':'SEU HISTÓRICO'}</span><h3>Recargas</h3><p>${owner?'Pagamentos e créditos concedidos aos revendedores.':'Acompanhe cobranças, Pix pendentes e créditos recebidos.'}</p></div><span class="step-chip">${rows.length} REGISTRO${rows.length===1?'':'S'}</span></div>${rows.length?rechargeTable(rows,owner):empty('Nenhuma recarga ainda',owner?'As recargas dos revendedores aparecerão aqui.':'Escolha uma quantidade acima para criar sua primeira cobrança Pix.')}</section>`;
 }
 function rechargeTable(rows,owner) {
@@ -308,9 +306,9 @@ function formObject(form) { return Object.fromEntries(new FormData(form).entries
 async function refresh(message) { await loadData(); if(message) toast(message); }
 function updateRechargePreview() {
   const input=document.getElementById('rechargeCredits'); if(!input) return;
-  const credits=Math.max(0, Math.floor(Number(String(input.value).replace(',','.'))||0)); const bonus=Math.floor(credits/10); const discount=rechargeDiscountPercent(credits); const original=credits*100; const amount=Math.round(original*(100-discount)/100);
-  const amountEl=document.getElementById('rechargeAmount'); const originalEl=document.getElementById('rechargeOriginalAmount'); const discountEl=document.getElementById('rechargeDiscount'); const bonusEl=document.getElementById('rechargeBonus'); const total=document.getElementById('rechargeTotal');
-  if(originalEl) originalEl.textContent=money(original); if(discountEl) discountEl.textContent=`-${discount}%`; if(amountEl) amountEl.textContent=money(amount); if(bonusEl) bonusEl.textContent=`+${creditText(bonus)}`; if(total) total.textContent=`${creditText(credits+bonus)} crédito${credits+bonus===1?'':'s'}`;
+  const credits=Math.max(0, Math.floor(Number(String(input.value).replace(',','.'))||0)); const bonus=Math.floor(credits/10); const unitPrice=rechargeUnitPriceCents(credits); const original=credits*100; const amount=credits*unitPrice; const saving=original-amount; const discountPercent=original ? Math.round(saving/original*100) : 0;
+  const unitEl=document.getElementById('rechargeUnitPrice'); const amountEl=document.getElementById('rechargeAmount'); const originalEl=document.getElementById('rechargeOriginalAmount'); const discountEl=document.getElementById('rechargeDiscount'); const discountPercentEl=document.getElementById('rechargeDiscountPercent'); const bonusEl=document.getElementById('rechargeBonus'); const total=document.getElementById('rechargeTotal');
+  if(unitEl) unitEl.textContent=money(unitPrice); if(originalEl) originalEl.textContent=money(original); if(discountEl) discountEl.textContent=money(saving); if(discountPercentEl) discountPercentEl.textContent=`${discountPercent}% OFF`; if(amountEl) amountEl.textContent=money(amount); if(bonusEl) bonusEl.textContent=`+${creditText(bonus)}`; if(total) total.textContent=`${creditText(credits+bonus)} crédito${credits+bonus===1?'':'s'}`;
 }
 appRoot.addEventListener('click', async e => {
   const passwordToggle=e.target.closest('[data-password-target]');
@@ -368,7 +366,7 @@ appRoot.addEventListener('submit', async e => {
         const out=await api('/api/recharges',{method:'POST',body:JSON.stringify({credits:Number(form.elements.credits.value)})});
         await loadData();
         if(paymentWindow) paymentWindow.location.replace(out.paymentUrl); else location.href=out.paymentUrl;
-        toast(`Cobrança de ${money(out.amountCents)} criada${out.discountPercent ? ` com ${out.discountPercent}% de desconto` : ''}. Pague no Pix para receber ${creditText(out.totalCredits)} créditos.`);
+        toast(`Cobrança de ${money(out.amountCents)} criada${out.discountCents ? ` com economia de ${money(out.discountCents)}` : ''}. Pague no Pix para receber ${creditText(out.totalCredits)} créditos.`);
       } catch(err) { if(paymentWindow) paymentWindow.close(); throw err; } finally { button.disabled=false; }
     }
   }catch(err){toast(err.message,'error');}

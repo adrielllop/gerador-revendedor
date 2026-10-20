@@ -665,26 +665,26 @@ async function botapixRequest(endpoint, options = {}) {
   }
   return payload?.data ?? payload;
 }
-function rechargeDiscountPercent(credits) {
-  if (credits >= 251) return 22;
-  if (credits >= 91) return 16;
-  if (credits >= 81) return 14;
-  if (credits >= 71) return 12;
-  if (credits >= 61) return 10;
-  if (credits >= 51) return 8;
-  if (credits >= 41) return 6;
-  if (credits >= 31) return 4;
-  if (credits >= 20) return 1;
-  return 0;
+function rechargeUnitPriceCents(credits) {
+  if (credits >= 1000) return 45;
+  if (credits >= 500) return 50;
+  if (credits >= 200) return 55;
+  if (credits >= 100) return 60;
+  if (credits >= 50) return 65;
+  if (credits >= 20) return 70;
+  if (credits >= 10) return 75;
+  return 100;
 }
 function parseRechargeCredits(value) {
   const credits = Number(String(value ?? '').replace(',', '.'));
   if (!Number.isSafeInteger(credits) || credits < 1 || credits > 10000) throw new Error('Escolha de 1 a 10.000 créditos para a recarga.');
   const bonusCredits = Math.floor(credits / 10);
-  const discountPercent = rechargeDiscountPercent(credits);
+  const unitPriceCents = rechargeUnitPriceCents(credits);
   const originalAmountCents = credits * 100;
-  const amountCents = Math.round(originalAmountCents * (100 - discountPercent) / 100);
-  return { purchasedCredits: credits, bonusCredits, totalCredits: credits + bonusCredits, originalAmountCents, discountPercent, amountCents };
+  const amountCents = credits * unitPriceCents;
+  const discountCents = originalAmountCents - amountCents;
+  const discountPercent = Math.round(discountCents / originalAmountCents * 100);
+  return { purchasedCredits: credits, bonusCredits, totalCredits: credits + bonusCredits, unitPriceCents, originalAmountCents, discountCents, discountPercent, amountCents };
 }
 function rechargeRowsFor(req) {
   const owner = req.session.user.role === 'owner';
@@ -1136,7 +1136,7 @@ app.post('/api/recharges', requireAuth, csrf, async (req, res) => {
       .run(Number(charge.id) || null, cleanText(charge.reference, 255) || null, String(charge.payment_url), cleanText(charge.status || 'pending', 40), rechargeId);
     audit(req.reseller.username, 'recharge_created', { rechargeId, amountCents: plan.amountCents, purchasedCredits: plan.purchasedCredits, bonusCredits: plan.bonusCredits, totalCredits: plan.totalCredits });
     if (charge.status === 'paid') await applyRechargeEvent({ eventId: `creation-${rechargeId}-paid`, eventName: 'payment.confirmed', data: { ...charge, external_reference: externalReference, amount: plan.amountCents, amount_paid: plan.amountCents } });
-    res.status(201).json({ id: rechargeId, amountCents: plan.amountCents, originalAmountCents: plan.originalAmountCents, discountPercent: plan.discountPercent, purchasedCredits: plan.purchasedCredits, bonusCredits: plan.bonusCredits, totalCredits: plan.totalCredits, paymentUrl: charge.payment_url, status: charge.status || 'pending' });
+    res.status(201).json({ id: rechargeId, amountCents: plan.amountCents, unitPriceCents: plan.unitPriceCents, originalAmountCents: plan.originalAmountCents, discountCents: plan.discountCents, discountPercent: plan.discountPercent, purchasedCredits: plan.purchasedCredits, bonusCredits: plan.bonusCredits, totalCredits: plan.totalCredits, paymentUrl: charge.payment_url, status: charge.status || 'pending' });
   } catch (err) {
     if (err.message.includes('SQLITE') || err.message.includes('UNIQUE')) return res.status(400).json({ error: 'Não foi possível registrar a recarga.' });
     res.status(Number(err.status) >= 400 && Number(err.status) < 500 ? 400 : 503).json({ error: err.message });
